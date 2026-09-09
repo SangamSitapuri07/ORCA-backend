@@ -28,6 +28,11 @@ Global Fishing Watch token — the server runs fine without them and says so in
 
 ## What it serves
 
+📘 **Full guide: [docs/API-GUIDE.md](docs/API-GUIDE.md)** — har external
+API kahan se aata hai, kya fetch hota hai, live status, aur ORCA ke apne
+endpoints ka poora hisaab.
+
+
 | Endpoint | What it answers (real mechanism) |
 |---|---|
 | `/api/v1/health` | live status of every source, credentials, cache |
