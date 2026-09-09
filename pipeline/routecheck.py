@@ -147,10 +147,35 @@ def compute_sea_route(from_lat: float, from_lon: float,
             except Exception:  # noqa: BLE001
                 continue
 
+    # Budget exhausted locally — the obstruction is bigger than an
+    # island (strait blocked, peninsula crossing, subcontinent between
+    # the points). Hand off to the SEA-PATH ENGINE: A* over the pooled
+    # GLOBE mask finds water-only waypoints around it, each leg then
+    # PROVEN at native 1 km before we draw it. Still no luck? Honest
+    # blocked below — never a fake safe line.
+    try:
+        from pipeline import seapath
+        sp = seapath.reroute(from_lat, from_lon, to_lat, to_lon)
+    except Exception:  # noqa: BLE001
+        sp = None
+    if sp and sp.get("found"):
+        return {**base, "ok": True, "detour": True, "rerouted": True,
+                "legs": sp["legs"],
+                "waypoints": sp["waypoints"],
+                "distance_km": sp["distance_km"],
+                "distance_nm": sp["distance_nm"],
+                "straight_distance_km": base["distance_km"],
+                "straight_distance_nm": base["distance_nm"],
+                "land_hit": {"lat": hit_lat, "lon": hit_lon, "sail_km": sail_km},
+                "method": base["method"] + "; " + sp["method"],
+                "reason": (f"direct course crosses land {sail_km:.0f} km out — sea path "
+                           f"computed around it ({len(sp['waypoints'])} waypoints, "
+                           f"{len(sp['legs'])} legs; every leg re-verified at 1 km)")}
+
     return {**base, "ok": False, "detour": False,
             "legs": [base["from"], base["to"]],
             "land_hit": {"lat": hit_lat, "lon": hit_lon, "sail_km": sail_km},
-            "reason": (f"course crosses land {sail_km:.0f} km out and no sea-only "
-                       f"detour cleared within {DETOUR_RADII_KM[-1]:.0f} km — treat as "
-                       "blocked; sail around the coast manually (we never draw a "
+            "reason": (f"course crosses land {sail_km:.0f} km out and sea-path search "
+                       "found no verified water route within the search budget — treat "
+                       "as blocked; pilot around the coast manually (we never draw a "
                        "fake safe line)")}

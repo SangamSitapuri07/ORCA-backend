@@ -173,9 +173,14 @@ def route_advisory(from_lat: float, from_lon: float,
     the single-point advisory uses), and folds it into a verdict."""
     from pipeline.routecheck import compute_sea_route
     rc = compute_sea_route(from_lat, from_lon, to_lat, to_lon)
-    pts = _sample_points(rc["legs"])
+    # Evidence budget: 5 points cover a direct leg; a REROUTED course
+    # (round a peninsula — can be thousands of km) gets up to 16 so its
+    # storms get seen too (vertices ALWAYS survive the thinning; mids
+    # share the rest of the budget evenly along the whole path).
+    max_pts = MAX_SAMPLES if len(rc["legs"]) <= 2 else min(16, 2 * len(rc["legs"]))
+    pts = _sample_points(rc["legs"], max_n=max_pts)
 
-    # Parallel fetches — 5 points × the cached marine+weather pair.
+    # Parallel fetches — N points × the cached marine+weather pair.
     # PER-POINT deadline: a slow worker must mark ITS point 'unknown',
     # never take the whole analysis down with it (honesty contract:
     # partial real answers beat one red exception).
@@ -189,7 +194,7 @@ def route_advisory(from_lat: float, from_lon: float,
         except Exception as e:  # noqa: BLE001
             failed[i] = f"{type(e).__name__}: {e}"
 
-    ex = ThreadPoolExecutor(max_workers=min(5, len(pts)))
+    ex = ThreadPoolExecutor(max_workers=min(8, len(pts)))
     try:
         futs = {ex.submit(one, i, p): i for i, p in enumerate(pts)}
         for fut in as_completed(futs):
@@ -233,9 +238,16 @@ def route_advisory(from_lat: float, from_lon: float,
         except Exception:  # noqa: BLE001
             pass
 
+    # Effective spacing actually achieved after the evidence budget's
+    # thinning — the frontend must print the REAL number, not the 30 km
+    # default, on long rerouted courses (honesty: spacing IS stated).
+    eff_spacing = round(pts[-1]["sail_km"] / max(1, len(pts) - 1), 1) if len(pts) > 1 else 0.0
+
     return {
         **{k: rc[k] for k in ("from", "to", "legs", "detour",
                               "distance_km", "distance_nm", "bearing_deg")},
+        **{k: rc[k] for k in ("rerouted", "waypoints",
+                              "straight_distance_km", "straight_distance_nm") if k in rc},
         "land_ok": rc.get("ok"),
         "land_reason": rc.get("reason"),
         "land_hit": rc.get("land_hit"),
@@ -244,9 +256,9 @@ def route_advisory(from_lat: float, from_lon: float,
         "safe_window_at_start": window,
         "sources_used": sources_used,
         "sources_failed": sources_failed,
-        "sample_spacing_km": SAMPLE_SPACING_KM,
+        "sample_spacing_km": eff_spacing,
         "method": ("verified course (GLOBE 1 km mask) sampled every "
-                   f"{SAMPLE_SPACING_KM:.0f} km; live Open-Meteo marine "
+                   f"{eff_spacing:.0f} km; live Open-Meteo marine "
                    "forecast per point; WMO/IMD small-craft thresholds "
                    "— identical to the single-point advisory"),
         "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
