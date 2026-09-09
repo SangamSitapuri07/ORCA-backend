@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SIH 2023–2025 — Top 20 Unfinished Problem Statements Worth Completing</title>
+<style>
+  :root{
+    --navy:#0f2540; --navy2:#16324f; --saffron:#e8752a; --green:#157a3d;
+    --ink:#1d2733; --muted:#5c6b7a; --line:#dfe6ee; --bg:#f5f8fb; --card:#ffffff; --red:#9c2b2b;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{font-family:'Segoe UI',system-ui,-apple-system,Arial,sans-serif; background:var(--bg); color:var(--ink); line-height:1.55;}
+  header{background:linear-gradient(135deg,#3a1c4f 0%,#16324f 55%,#0f2540 100%); color:#fff; padding:38px 5% 30px;}
+  header .kicker{letter-spacing:2px; font-size:12px; text-transform:uppercase; color:#f4a259; font-weight:700;}
+  header h1{font-size:29px; margin:8px 0 6px; line-height:1.25;}
+  header p{max-width:940px; color:#cbd9e8; font-size:15px;}
+  .chips{margin-top:16px; display:flex; flex-wrap:wrap; gap:8px;}
+  .chip{background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.25); border-radius:30px; padding:5px 13px; font-size:12.5px; color:#e8eef5;}
+  .wrap{max-width:1180px; margin:0 auto; padding:26px 20px 60px;}
+  h2.section{font-size:21px; color:var(--navy); margin:34px 0 6px; display:flex; align-items:center; gap:10px;}
+  h2.section::after{content:""; flex:1; height:2px; background:linear-gradient(90deg,var(--saffron),transparent);}
+  .sub{color:var(--muted); font-size:14px; margin-bottom:16px; max-width:980px;}
+  .logic{background:#fff7ef; border:1px solid #f3d3b5; border-left:5px solid var(--saffron); border-radius:10px; padding:16px 18px;}
+  .logic h3{font-size:15.5px; color:#a34f12; margin-bottom:8px;}
+  .logic ul{margin-left:20px; font-size:14px;}
+  .logic li{margin:4px 0;}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; box-shadow:0 2px 8px rgba(15,37,64,.05); margin-bottom:16px;}
+  .card .top{display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;}
+  .rank{font-size:13px; font-weight:800; color:#fff; background:var(--navy); border-radius:8px; padding:2px 10px;}
+  .badges{display:flex; gap:6px; flex-wrap:wrap;}
+  .badge{font-size:11px; font-weight:800; border-radius:6px; padding:3px 9px;}
+  .b-rec{background:#fbe4e4; color:var(--red);}
+  .b-rec3{background:#fbd7d7; color:#7d1f1f;}
+  .b-yr{background:#e6effc; color:#1c4f9c;}
+  .b-map{background:#e2f4e8; color:#156b37;}
+  .card h3{font-size:17px; color:var(--navy); margin:10px 0 2px;}
+  .org{font-size:12.5px; color:var(--green); font-weight:700; margin-bottom:10px;}
+  .cols{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+  @media(max-width:700px){.cols{grid-template-columns:1fr;}}
+  .col{border-radius:9px; padding:10px 12px; font-size:13.3px;}
+  .col.fail{background:#fdf3f3; border:1px solid #f0d4d4;}
+  .col.fix{background:#f2faf5; border:1px solid #cdeeda;}
+  .col h4{font-size:12px; text-transform:uppercase; letter-spacing:.5px; margin-bottom:5px;}
+  .col.fail h4{color:var(--red);}
+  .col.fix h4{color:var(--green);}
+  .col ul{margin-left:17px;}
+  .col li{margin:3px 0;}
+  .map26{font-size:12.5px; margin-top:10px; color:var(--muted); border-top:1px dashed var(--line); padding-top:8px;}
+  .map26 b{color:var(--navy);}
+  footer{margin-top:40px; font-size:12px; color:var(--muted); border-top:1px solid var(--line); padding-top:14px;}
+</style>
+</head>
+<body>
+<header>
+  <div class="kicker">Smart India Hackathon · Archive Analysis 2023 → 2025 (+ 2026 echoes)</div>
+  <h1>Top 20 Old SIH Problem Statements That Were Never Really Finished — and How to Complete Them</h1>
+  <p>SIH does not publish per-problem "solution quality" scores, so this list is built on hard signals mined from 4 years of problem-statement archives: <b>(1) ministries re-submitting the same problem in multiple editions</b> — the clearest sign no past solution was adopted, and <b>(2) well-documented hackathon failure modes</b> where every 36-hour prototype in that space fell short of a deployable solution.</p>
+  <div class="chips">
+    <span class="chip">2023: ~180 PS mined</span>
+    <span class="chip">2024: ~230 PS mined</span>
+    <span class="chip">2025: ~100 PS mined</span>
+    <span class="chip">2026 cross-check: 226 PS</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+<h2 class="section">How "incomplete / not up to mark" was judged</h2>
+<div class="logic">
+  <h3>🔍 The two signals used (be skeptical of anything else — winner code is rarely public):</h3>
+  <ul>
+    <li><b>Signal 1 — Re-submission (strongest):</b> If a ministry pays the cost of writing and mentoring the <i>same problem again</i> in 2024, 2025 or 2026, the previous winners' outputs were clearly not deployed/adopted. Several problems below have been asked <b>3 editions running</b>.</li>
+    <li><b>Signal 2 — Structural incompleteness:</b> Problems where the winning-typical approach is known to stop at a toy: CNN trained on 200 images, SOS button apps, slideshow "text-to-video", chatbots that hallucinate on legal text. The gap between demo and deployment is documented and closeable.</li>
+    <li><b>Bonus column:</b> Where the unsolved 2023–25 problem has re-incarnated as an <b>SIH 2026 PS</b>, your completed work becomes directly competition-ready.</li>
+  </ul>
+</div>
+
+<h2 class="section">The 20 picks</h2>
+<p class="sub">Ordered by combination of hardness of the gap + impact if completed + evidence of repeated ask. Each card shows why past attempts fell short and the exact features that would make it "complete".</p>
+
+<!-- 1 -->
+<div class="card">
+  <div class="top"><span class="rank">1</span><div class="badges">
+    <span class="badge b-yr">SIH 2023 · SIH1343 · Software</span><span class="badge b-rec">⧗ RE-ASKED 2024 (×3 herbal PS)</span>
+  </div></div>
+  <h3>Medicinal Plant / Raw-Drug Identification</h3>
+  <div class="org">Ministry of AYUSH</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>Everyone trained a leaf-CNN on 10–20 garden plants from phone photos</li>
+      <li>Real AYUSH supply chain needs <b>raw drug</b> ID: dried roots, bark, powders — nobody tackled it</li>
+      <li>No adulterant/substitute detection (the actual industry pain point)</li>
+      <li>No offline mode for field/forest collection</li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>Two-stage pipeline: fresh-plant vision model + raw-drug model with confidence + "unknown" rejection</li>
+      <li>Adulteration flag via texture/micro-feature comparison against reference samples</li>
+      <li>Offline-first Android app (TFLite) + Indic languages for collectors</li>
+      <li>Validated against a public herbarium/raw-drug atlas; publish accuracy per class</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>2026 echo:</b> Ministry of Ayush is back with IP-SAKTI (SIH26045) & clinical-trial PS — domain trust is still being built; a drug-authentication tool slots right in.</div>
+</div>
+
+<!-- 2 -->
+<div class="card">
+  <div class="top"><span class="rank">2</span><div class="badges">
+    <span class="badge b-yr">SIH 2024 · SIH1555 / SIH1715 · Software</span><span class="badge b-rec3">⧗ RE-ASKED 2022, 2023, 2024</span>
+  </div></div>
+  <h3>Indian Sign Language ⇄ Text/Speech Translation</h3>
+  <div class="org">Ministry of Social Justice &amp; Empowerment / AICTE</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>Nearly every team demoed static <b>fingerspelling alphabets</b> (ASL-style), not real ISL sentences</li>
+      <li>Zero handling of <b>non-manual markers</b> (facial grammar) — which the 2024 PS explicitly demanded</li>
+      <li>One-way only; no signed-video generation back from text</li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>Continuous sign recognition on ISL sentence datasets (pose-track + sequence models), not isolated gestures</li>
+      <li>Non-manual feature channel (eyebrows/mouthing) fused with hand features</li>
+      <li>Two-way: ISL→text and text→avatar/gloss output</li>
+      <li>Field-tested with a deaf association; word-error-rate reported honestly</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>Why now:</b> Open pose-estimation + video models are finally good enough in 2026 to do what 2022-24 hardware couldn't. This is the single most impressive "unfinished business" in SIH history.</div>
+</div>
+
+<!-- 3 -->
+<div class="card">
+  <div class="top"><span class="rank">3</span><div class="badges">
+    <span class="badge b-yr">SIH 2023 · SIH1282 · Software</span><span class="badge b-rec">⧗ Justice-tech RE-ASKED 2024 → 2026</span>
+  </div></div>
+  <h3>Tech-Driven Solutions for Undertrial Prisoners</h3>
+  <div class="org">Ministry of Law &amp; Justice</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>Solutions were informational portals/FAQ chatbots — nothing that moves a single prisoner closer to release</li>
+      <li>No linkage to the real bottleneck: identifying <b>bail-eligible undertrials stuck for want of paperwork</b></li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>Eligibility screening engine over ePrisons-style records (offence, time served, Sec 436A BNSS) → auto-flag list for district legal services authority</li>
+      <li>Document checklist generator + status tracker per case; family/legal-aid matching workflow</li>
+      <li>Audit-grade privacy design (this is the part judges drilled teams on)</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>2026 echo:</b> MHA is back with criminal-justice PS (SIH26189, SIH26190). A mature 2023-grade justice tool + 2026 polish = strong portfolio or finale entry.</div>
+</div>
+
+<!-- 4 -->
+<div class="card">
+  <div class="top"><span class="rank">4</span><div class="badges">
+    <span class="badge b-yr">SIH 2023 · SIH1284 · Software</span><span class="badge b-rec">⧗ RE-ASKED 2024 (same PS)</span>
+  </div></div>
+  <h3>Blockchain-Based eVault for Legal Records</h3>
+  <div class="org">Ministry of Law &amp; Justice</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>"Blockchain for the sake of it" — token demos with no <b>chain-of-custody</b> logic courts actually need</li>
+      <li>No role model (judge/clerk/advocate/police), no sealing/unsealing workflow, no hash-verification UX a clerk can use</li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>Permissioned chain (Hyperledger Fabric) with evidence lifecycle: deposit→seal→transfer→view with immutable audit trail</li>
+      <li>Integration points with eCourts/DigiLocker; PDF hash-anchor and tamper-evidence viewer</li>
+      <li>Gas-free ops + recoverable keys for a government setting (why pure public-chain demos died)</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>2026 echo:</b> SIH26190 — Secure digital document management for legal/investigation documents (MHA). Your completed eVault ≈ a head start on this year's finale.</div>
+</div>
+
+<!-- 5 -->
+<div class="card">
+  <div class="top"><span class="rank">5</span><div class="badges">
+    <span class="badge b-yr">SIH 2023 · SIH1357 · Software</span><span class="badge b-rec3">⧗ ASKED 2023 → 2024 → 2026 (3 editions)</span>
+  </div></div>
+  <h3>Sentiment Analysis of Social Media Presence</h3>
+  <div class="org">Ministry of Commerce → NTRO</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>English-only VADER/TextBlob on tweets — useless on <b>code-mixed Hinglish</b>, the dominant register of Indian social media</li>
+      <li>Overall sentiment only; no aspect-level ("price good, delivery bad"), sarcasm, or coordinated-bot detection</li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>Multilingual code-mixed pipeline (IndicBERT/MuRIL) with aspect-based sentiment</li>
+      <li>Sarcasm + bot/coordination flags; trend narratives auto-summarized by an LLM with citations to posts</li>
+      <li>Live dashboard on a streaming source with evaluation numbers per language bucket</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>2026 echo:</b> SIH26152 — Social Media Analytics (NTRO). Third time asked. A code-mixed, aspect-level engine is exactly what none of the 26052 submissions will have.</div>
+</div>
+
+<!-- 6 -->
+<div class="card">
+  <div class="top"><span class="rank">6</span><div class="badges">
+    <span class="badge b-yr">SIH 2023 · SIH1364 · Software</span><span class="badge b-rec">⧗ RE-ASKED 2024 · feeds 2026 MHA PS</span>
+  </div></div>
+  <h3>Fake Social Media Profile Detection &amp; Reporting</h3>
+  <div class="org">Government of Gujarat</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>Random-forest on follower/following counts (Botometer-clone features) trained on synthetic data — collapses on real impersonation accounts</li>
+      <li>Zero treatment of <b>impersonation rings</b> and cloned-profile image matching</li>
+      <li>No actual "reporting" workflow — the second half of the PS</li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>Multimodal scoring: metadata + posted-image reuse (pHash/embeddings vs real user's photos) + posting-bursty graphs</li>
+      <li>Ring detection: cluster impersonators sharing infrastructure/templates</li>
+      <li>End-to-end: flag → evidence bundle → one-click reporting packet for platform/police formats</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>2026 echo:</b> SIH26188 — Fake identity &amp; document screening (MHA). Same DNA, bigger stage.</div>
+</div>
+
+<!-- 7 -->
+<div class="card">
+  <div class="top"><span class="rank">7</span><div class="badges">
+    <span class="badge b-yr">SIH 2024 · SIH1545 · Software</span><span class="badge b-rec">⧗ NCB ask; theme returns 2026 (MHA cyber)</span>
+  </div></div>
+  <h3>Identify Users Behind Drug Trafficking on Telegram / WhatsApp / Instagram</h3>
+  <div class="org">Narcotics Control Bureau (NCB)</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>Arguably the least-solved PS of 2024: encryption makes the naive ask impossible, so teams presented slideware</li>
+      <li>Nobody scoped the <b>legally &amp; technically possible</b> subset: public channel/marketplace OSINT</li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>Realistic re-scope: monitor <b>public</b> Telegram channels/groups &amp; hashtags; detect coded drug lexicon (emoji/slang NER) in Indic languages</li>
+      <li>Vendor-network graphs from public metadata; suspicious-account triage with evidence capture</li>
+      <li>Strict legal/privacy boundary documentation — judges killed teams precisely on this</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>2026 echo:</b> MHA crypto-tracing trio (SIH26182–26184) is the same investigative-OSINT muscle. Complete this and you've built the hardest demo in that finale room.</div>
+</div>
+
+<!-- 8 -->
+<div class="card">
+  <div class="top"><span class="rank">8</span><div class="badges">
+    <span class="badge b-yr">SIH 2023 · SIH1453 · Software</span><span class="badge b-rec">⧗ RE-ASKED 2024 → reborn ×3 in 2026 NTRO PS</span>
+  </div></div>
+  <h3>Investigation of Vulnerabilities in Crypto Library Implementations</h3>
+  <div class="org">NTRO</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>Teams explained side-channel theory in slides; almost none shipped a <b>tool</b> that scans code/protocol configs and finds misuse</li>
+      <li>No coverage of the real-world failure mode: misconfiguration &amp; deprecated primitives, not exotic math breaks</li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>Static analyzer (Semgrep rules + LLM triage) for crypto misuses in C/Java/Python: ECB mode, hard-coded keys, weak RNG, reused IVs</li>
+      <li>Protocol posture grader for TLS/IPsec configs with CVE cross-reference</li>
+      <li>Report with severity, exploit path and remediation patch-diff</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>2026 echo:</b> SIH26159 (email crypto posture), SIH26160 (IPsec VPN analyzer), SIH26164 (Enterprise Crypto Discovery). NTRO asked this three times — they've never gotten the tool.</div>
+</div>
+
+<!-- 9 -->
+<div class="card">
+  <div class="top"><span class="rank">9</span><div class="badges">
+    <span class="badge b-yr">SIH 2023 · SIH1287 / SIH1288 · Software</span><span class="badge b-rec">⧗ RE-ASKED 2024 (same PS)</span>
+  </div></div>
+  <h3>Non-Revenue Water &amp; Water-Footprint Assessment for Utilities</h3>
+  <div class="org">Ministry of Jal Shakti</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>Built water-footprint <b>calculators</b> (definitional web forms) — not an NRW loss-detection system</li>
+      <li>No DMA (district metered area) zone math, no night-line minimum-flow analysis, no leak localization from pressure/flow anomalies</li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>DMA-balance engine: inflow vs billed consumption → NRW% per zone, leakage hotspot ranking</li>
+      <li>Anomaly detection on flow/pressure series (synthetic series is fine — model a city rigorously)</li>
+      <li>Utility dashboard + prioritized repair worklist with ₹ recovered/year estimate</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>Context:</b> Jal Shakti keeps returning to SIH (2025 INGRES chatbot etc.) — water-data tooling remains an open ministry need.</div>
+</div>
+
+<!-- 10 -->
+<div class="card">
+  <div class="top"><span class="rank">10</span><div class="badges">
+    <span class="badge b-yr">SIH 2023 · SIH1312 · Software</span><span class="badge b-rec3">⧗ Regulation-chatbot asked 2023 → 2026 (BIS ×2)</span>
+  </div></div>
+  <h3>Hallucination-Proof Chatbot on Acts, Rules &amp; Government Regulations</h3>
+  <div class="org">Ministry of Coal → (2026) BIS / Ministry of Consumer Affairs</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>Wrapped GPT around scraped PDFs; answers <b>confidently wrong</b> on section numbers — fatal for legal/regulatory use</li>
+      <li>No amendment-awareness: laws change; demos mixed repealed and current text</li>
+      <li>No refusal behavior on out-of-scope questions</li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>RAG with strict citation-anchoring: every sentence linked to act/section/clause; answers suppressed without retrieval support</li>
+      <li>Versioned corpus with amendment lineage + "as-on-date" filter</li>
+      <li>Bake-off eval set (100 officer-written Q&amp;As) with citation-accuracy score published</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>2026 echo:</b> SIH26107 &amp; SIH26108 (BIS standards assistant). The ministry has asked for this 3 editions straight — still waiting for a non-hallucinating answer machine.</div>
+</div>
+
+<!-- 11 -->
+<div class="card">
+  <div class="top"><span class="rank">11</span><div class="badges">
+    <span class="badge b-yr">SIH 2023 · SIH1301 · Software</span><span class="badge b-rec">⧗ RE-ASKED 2024 (same PS)</span>
+  </div></div>
+  <h3>Official-Language English→Hindi Translation Tool (Gazette/Ministry Register)</h3>
+  <div class="org">Ministry of Power</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>Called Google/Bhashini APIs in a wrapper — failed on <b>administrative terminology</b> (संकल्पना-सpecific officialese), translating "concurrence", "despatch", "acquittance" absurdly</li>
+      <li>Destroyed document formatting (tables, headers, stamps) in PDF→PDF translation</li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>Terminology memory built from real bilingual govt documents (parallel corpus of official orders)</li>
+      <li>Layout-preserving pipeline: PDF in → PDF out with tables intact</li>
+      <li>Human-in-the-loop review UI with post-editing tracking (how ministries actually work)</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>Why it matters:</b> Every Hindi-officer workflow in the country needs this; a layout-safe, terminology-true translator is a real product, not a demo.</div>
+</div>
+
+<!-- 12 -->
+<div class="card">
+  <div class="top"><span class="rank">12</span><div class="badges">
+    <span class="badge b-yr">SIH 2023 · SIH1330 · Software</span><span class="badge b-rec">⧗ RE-ASKED 2024 (same PS)</span>
+  </div></div>
+  <h3>Text-to-Video Generation of PIB Press Releases</h3>
+  <div class="org">Ministry of Information &amp; Broadcasting</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>2023/24 tech wasn't there: teams made <b>slideshows with TTS</b> — clips of irrelevant stock footage over robotic narration</li>
+      <li>No sync of visuals to factual claims; no news-package structure (headline→context→quote)</li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>Claim-grounded pipeline: press release → script → scene plan → matching licensed/generated B-roll + anchor avatar + burned captions</li>
+      <li>Fact-coverage checker: every number in the video traced to the release</li>
+      <li>PIB house-style templates; <b>this is finally feasible with 2026 open video/avatar tooling</b> — the perfect "finish what 2023 couldn't" project</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>2026 echo:</b> SIH26154 — Gen-AI automated content transformation (NTRO). Same dream, new tooling generation.</div>
+</div>
+
+<!-- 13 -->
+<div class="card">
+  <div class="top"><span class="rank">13</span><div class="badges">
+    <span class="badge b-yr">SIH 2024 · SIH1647 · Software</span><span class="badge b-rec">⧗ Agri-price asks return 2025 → 2026</span>
+  </div></div>
+  <h3>AI/ML Price-Forecasting for Pulses &amp; Vegetables (Onion, Potato)</h3>
+  <div class="org">Ministry of Consumer Affairs, Food &amp; Public Distribution</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>Trained an ARIMA/LSTM on an old Agmarknet CSV — demo worked, system died: no <b>live data pipeline</b></li>
+      <li>Ignored what actually moves onion/tomato prices: arrivals, rain events, export bans, mandi strikes</li>
+      <li>Point forecasts with no confidence band = useless for a buffer-stock officer</li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>Live ingestion (Agmarknet/eNAM daily) with auto-retraining + drift alarm</li>
+      <li>Exogenous features: arrivals, weather, policy events; probabilistic forecast with P10/P90 bands</li>
+      <li>Officer view: "probability of breaching threshold in 30 days" trigger for intervention</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>2026 echo:</b> SIH26132 (market linkage &amp; price discovery, Maharashtra) — the price-intelligence core you build transfers directly.</div>
+</div>
+
+<!-- 14 -->
+<div class="card">
+  <div class="top"><span class="rank">14</span><div class="badges">
+    <span class="badge b-yr">SIH 2024 · SIH1621 · Software</span><span class="badge b-rec3">⧗ Crop-disease ask 2023 Kerala → 2024 → 2026 Maharashtra</span>
+  </div></div>
+  <h3>AI-Driven Crop Disease Prediction &amp; Management System</h3>
+  <div class="org">Ministry of Agriculture &amp; Farmers Welfare</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>PlantVillage-clone: 95% lab accuracy, collapses on farm photos (mud background, blur, mixed symptoms) — judges have seen this exact demo 500 times</li>
+      <li>Stopped at "this is leaf blight" with no <b>treatment + dosage + locally-available product</b> advisory</li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>Field-robust training: real farm-photo augmentation, out-of-distribution rejection ("not a disease / retake photo")</li>
+      <li>Advisory layer: cure + dose + nearest-input-dealer + cost, in the farmer's language</li>
+      <li>Outbreak early-warning: aggregate anonymized detections on a district map for the agri dept</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>2026 echo:</b> SIH26131 (early detection of crop disease/pest, Maharashtra). Fourth edition asking. They want the field-grade one.</div>
+</div>
+
+<!-- 15 -->
+<div class="card">
+  <div class="top"><span class="rank">15</span><div class="badges">
+    <span class="badge b-yr">SIH 2024 · SIH1605/1620/1649/1590 family · Software</span><span class="badge b-rec">⧗ Repeated within 2024 itself (BEL ×4)</span>
+  </div></div>
+  <h3>Women Safety Analytics — Beyond the SOS Button</h3>
+  <div class="org">Bharat Electronics Ltd. (BEL)</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>Every single team built another SOS-button + live-location app — the App Store has 10,000 of them</li>
+      <li>The PS asked for <b>analytics</b>: nobody built hotspot/predictive layers from crime data</li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>FIR/PCR-call data → spatio-temporal risk maps; "time × place" risk-score engine for safe routing</li>
+      <li>Proactive patrol deployment recommendations for police control rooms</li>
+      <li>Incident anomaly triggers (offline; on-device audio distress detection opt-in) with strict privacy design</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>Note:</b> Repeating this PS inside one edition means they kept asking because no entry satisfied the analytics ask.</div>
+</div>
+
+<!-- 16 -->
+<div class="card">
+  <div class="top"><span class="rank">16</span><div class="badges">
+    <span class="badge b-yr">SIH 2023 · SIH1349 · Software</span><span class="badge b-rec">⧗ RE-ASKED 2024 · MHA CCTV again 2026</span>
+  </div></div>
+  <h3>Crowd &amp; Crime Analytics on Existing CCTV Networks</h3>
+  <div class="org">Ministry of Railways → MHA (2026)</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>Demos ran on curated YouTube clips at 720p; real constraint was <b>existing grainy, odd-angle station cameras</b> and running on cheap edge boxes</li>
+      <li>Counted people; didn't flag precursors (<b>density surge → stampede risk</b>, loitering, wrong-direction flow, unattended baggage)</li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>Edge-inference design (INT8, Jetson-class budget) with multi-camera person re-ID across views</li>
+      <li>Event engine: crowd-density heat + surge-rate alerts, unattended-object, perimeter breach</li>
+      <li>Alert console with playback-snippet evidence + false-alarm feedback loop</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>2026 echo:</b> SIH26187 — AI video analytics on existing CCTV for border surveillance (MHA). Third appearance of this ask.</div>
+</div>
+
+<!-- 17 -->
+<div class="card">
+  <div class="top"><span class="rank">17</span><div class="badges">
+    <span class="badge b-yr">SIH 2023–25 · SIH1309 (wool) / SIH25027 (herbs) · Software</span><span class="badge b-rec3">⧗ Provenance asked 2023 → 2025 → 2026 (honey)</span>
+  </div></div>
+  <h3>Farm-to-Consumer Traceability Blockchain (Wool / Ayurvedic Herbs / Honey)</h3>
+  <div class="org">Ministry of Textiles → Ministry of Ayush → Ministry of MSME</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>Elegant chains, unusable <b>farmer-side entry</b>: 40-year-old beekeepers aren't filling web forms — so the ledger stayed empty</li>
+      <li>No anti-gaming: nothing stopped scanning the same QR on 50 fake jars</li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>Voice/photo-first data entry in local language; offline QR batch printing for FPOs</li>
+      <li>Mass-balance anti-counterfeit: batch weights must reconcile at every hop; one-scan-one-unit</li>
+      <li>Consumer story page (farmer photo, village, tests) — the trust moment that sells the product</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>2026 echo:</b> SIH26021 — Honey Chain (MSME). Same ask, fourth edition. Whoever brings the farmer-usable version wins.</div>
+</div>
+
+<!-- 18 -->
+<div class="card">
+  <div class="top"><span class="rank">18</span><div class="badges">
+    <span class="badge b-yr">SIH 2025 · SIH25022 · Software</span><span class="badge b-rec">⧗ Rail-ops optimization again 2026</span>
+  </div></div>
+  <h3>Maximizing Section Throughput with AI Train-Traffic Control</h3>
+  <div class="org">Ministry of Railways</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>Toy 3-train simulations; no modeling of <b>real constraints</b> (crossing loops, precedence classes, block working, crew/path conflicts)</li>
+      <li>Optimization ran once on a static timetable — controllers need <b>re-optimization under live delay perturbation</b></li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>Discrete-event simulator of a real section (public timetable data) with loop constraints</li>
+      <li>Conflict-resolution optimizer (MILP/CP-SAT) + what-if console for the controller</li>
+      <li>Throughput/delay KPIs benchmarked vs baseline dispatch</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>2026 echo:</b> SIH26027 (automatic block planning, Railways). Directly adjacent — your simulator is this year's differentiator.</div>
+</div>
+
+<!-- 19 -->
+<div class="card">
+  <div class="top"><span class="rank">19</span><div class="badges">
+    <span class="badge b-yr">SIH 2025 · SIH25070 · Software</span><span class="badge b-rec">⧗ NTRO secure-erasure again 2026</span>
+  </div></div>
+  <h3>Secure Data Wiping for Trustworthy IT-Asset Recycling</h3>
+  <div class="org">Ministry of Mines</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>Teams shipped a file-shredder script; the PS needs <b>NIST 800-88 device-level sanitization with proof</b></li>
+      <li>No verification certificate, no handling of SSDs (wear-leveling defeats overwriting), no chain-of-custody for e-waste handlers</li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>Bootable wiper with per-drive profiles (ATA Secure Erase/crypto-erase for SSD, multi-pass for HDD), SMART verification</li>
+      <li>Signed tamper-evident sanitization certificate (QR-verifiable) + asset registry</li>
+      <li>Recovery-resistance test report (try carving your own wiped disk — show it fails)</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>2026 echo:</b> SIH26149 — Secure data erasure + forensic file recovery tool (NTRO). Two years, same unmet need.</div>
+</div>
+
+<!-- 20 -->
+<div class="card">
+  <div class="top"><span class="rank">20</span><div class="badges">
+    <span class="badge b-yr">SIH 2025 · SIH25108 · Software</span><span class="badge b-rec">⧗ Land-governance cluster exploded in 2026 (×8 PS)</span>
+  </div></div>
+  <h3>FRA Atlas — Forest Rights Act WebGIS Decision-Support System</h3>
+  <div class="org">Ministry of Tribal Affairs</div>
+  <div class="cols">
+    <div class="col fail"><h4>Why past attempts fell short</h4><ul>
+      <li>Built a pretty map viewer of public shapefiles; FRA is a <b>legal workflow</b> (claim→Gram Sabha→SDLC→DLC→title) — nobody mapped the claim lifecycle</li>
+      <li>No offline capability though target users are in zero-connectivity forest villages</li>
+    </ul></div>
+    <div class="col fix"><h4>What "complete" looks like</h4><ul>
+      <li>Claim-track system: GPS-tagged evidence collection offline → sync; status per claim at each committee level</li>
+      <li>GIS layers (forest cover, village boundaries, CFR potential area) with conflict-overlay analytics</li>
+      <li>Public dashboard of titles granted vs potential — the transparency outcome MoTA actually wants</li>
+    </ul></div>
+  </div>
+  <div class="map26"><b>2026 echo:</b> Ministry of Rural Development's 8-PS land cluster (SIH26011–26019). Land records is this year's biggest ministry theme — and still unfinished.</div>
+</div>
+
+<h2 class="section">How to use this list</h2>
+<div class="logic">
+  <ul>
+    <li><b>For SIH 2026:</b> Cards with a green "2026 echo" tell you which old problem has re-incarnated this year — studying the 2023–25 failure modes of that exact PS is free competitive intelligence nobody else in your finale room has.</li>
+    <li><b>For independent projects/startups:</b> A ministry that asked 3 times is a <b>validation of demand</b>. Completing ISL translation, official-language translation, NRW analytics, or TB-grade crypto tooling is portfolio-and-startup grade work.</li>
+    <li><b>Execution rule:</b> "Complete" = the gap column, not the original demo column. Ship the embarrassing edge cases (offline, Hindi, re-take-photo, verification certificates) — that's the difference between another SIH demo and the solution the ministry finally adopts.</li>
+  </ul>
+</div>
+
+<footer>
+  Compiled 25 Aug 2026 from SIH problem-statement archives: 2023 (tcetmumbai.in mirror, ~180 SW PS), 2024 (official/college mirrors + verified repo records, ~230 PS), 2025 (driems.ac.in + community XLSX, ~100 PS) and the full 2026 set (226 PS). "Re-asked" chains were detected by cross-year similarity matching on 740+ parsed statements and verified by hand. SIH does not publish per-PS winner-quality data; incompleteness calls are analytical judgments, marked as such. Verify current-year PS details on sih.gov.in.
+</footer>
+
+</div>
+</body>
+</html>

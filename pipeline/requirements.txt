@@ -1,0 +1,9 @@
+# Pipeline-layer dependencies (separate from the backend's requirements.txt)
+# Install: pip install -r pipeline/requirements.txt
+requests>=2.31.0
+xarray>=2024.1.0
+netCDF4>=1.6.0
+h5py>=3.10.0
+numpy>=1.26.0
+tqdm>=4.66.0
+global-land-mask>=1.0.0  # real GLOBE 1 km land/sea mask (stops on-land "hotspots")

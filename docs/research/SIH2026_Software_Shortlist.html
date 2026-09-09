@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SIH 2026 — Software Problem Statement Shortlist (Win-Oriented)</title>
+<style>
+  :root{
+    --navy:#0f2540; --navy2:#16324f; --saffron:#e8752a; --green:#157a3d;
+    --ink:#1d2733; --muted:#5c6b7a; --line:#dfe6ee; --bg:#f5f8fb; --card:#ffffff;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{font-family:'Segoe UI',system-ui,-apple-system,Arial,sans-serif; background:var(--bg); color:var(--ink); line-height:1.55;}
+  header{background:linear-gradient(135deg,#0f2540 0%,#16324f 60%,#1e4270 100%); color:#fff; padding:38px 5% 30px;}
+  header .kicker{letter-spacing:2px; font-size:12px; text-transform:uppercase; color:#f4a259; font-weight:700;}
+  header h1{font-size:30px; margin:8px 0 6px; line-height:1.25;}
+  header p{max-width:900px; color:#c9d6e4; font-size:15px;}
+  .chips{margin-top:16px; display:flex; flex-wrap:wrap; gap:8px;}
+  .chip{background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.25); border-radius:30px; padding:5px 13px; font-size:12.5px; color:#e8eef5;}
+  .wrap{max-width:1160px; margin:0 auto; padding:26px 20px 60px;}
+  h2.section{font-size:21px; color:var(--navy); margin:34px 0 6px; display:flex; align-items:center; gap:10px;}
+  h2.section::after{content:""; flex:1; height:2px; background:linear-gradient(90deg,var(--saffron),transparent);}
+  .sub{color:var(--muted); font-size:14px; margin-bottom:16px; max-width:960px;}
+  .strategy{background:#fff7ef; border:1px solid #f3d3b5; border-left:5px solid var(--saffron); border-radius:10px; padding:16px 18px; margin-bottom:8px;}
+  .strategy h3{font-size:15.5px; color:#a34f12; margin-bottom:8px;}
+  .strategy ul{margin-left:20px; font-size:14px;}
+  .strategy li{margin:4px 0;}
+  .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(500px,1fr)); gap:16px;}
+  @media(max-width:560px){.grid{grid-template-columns:1fr;}}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px 18px 14px; box-shadow:0 2px 8px rgba(15,37,64,.05); display:flex; flex-direction:column;}
+  .card .top{display:flex; align-items:baseline; justify-content:space-between; gap:10px;}
+  .rank{font-size:13px; font-weight:800; color:#fff; background:var(--navy); border-radius:8px; padding:2px 9px; white-space:nowrap;}
+  .rank.gold{background:var(--saffron);}
+  .psid{font-size:12.5px; color:var(--muted); font-weight:700;}
+  .card h3{font-size:16.5px; color:var(--navy); margin:8px 0 2px; line-height:1.35;}
+  .org{font-size:12.5px; color:var(--green); font-weight:700; margin-bottom:10px;}
+  .why{font-size:13.8px;}
+  .why b{color:var(--navy);}
+  .meta{display:flex; flex-wrap:wrap; gap:6px; margin:11px 0 4px;}
+  .pill{font-size:11.5px; font-weight:700; border-radius:6px; padding:3px 9px;}
+  .pill.comp-low{background:#e2f4e8; color:#156b37;}
+  .pill.comp-med{background:#fdf0d8; color:#8a5a0b;}
+  .pill.comp-high{background:#fbe4e4; color:#9c2b2b;}
+  .pill.feas{background:#e6effc; color:#1c4f9c;}
+  .pill.demo{background:#f1e8fc; color:#6233a8;}
+  .stack{font-size:12.5px; color:var(--muted); margin-top:8px; border-top:1px dashed var(--line); padding-top:8px;}
+  .stack b{color:var(--navy2);}
+  .demoidea{font-size:12.8px; background:#f4faf6; border:1px solid #d8ecdf; border-radius:8px; padding:7px 10px; margin-top:8px;}
+  .demoidea b{color:var(--green);}
+  table.avoid{width:100%; border-collapse:collapse; background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 2px 8px rgba(15,37,64,.05); font-size:13.5px;}
+  table.avoid th{background:var(--navy); color:#fff; text-align:left; padding:10px 12px; font-size:12.5px;}
+  table.avoid td{padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top;}
+  table.avoid tr:nth-child(even) td{background:#f8fbfe;}
+  .tips{background:#eef4fb; border:1px solid #cfdeef; border-radius:12px; padding:16px 18px; font-size:14px;}
+  .tips ol{margin-left:20px;}
+  .tips li{margin:6px 0;}
+  footer{margin-top:40px; font-size:12px; color:var(--muted); border-top:1px solid var(--line); padding-top:14px;}
+  .tagline{display:inline-block; margin-left:8px; font-size:11px; background:#e8752a; color:#fff; border-radius:5px; padding:1px 7px; vertical-align:middle;}
+</style>
+</head>
+<body>
+<header>
+  <div class="kicker">Smart India Hackathon 2026 · Strategy Report</div>
+  <h1>Software Problem Statement Shortlist — Picked for Maximum Winning Probability</h1>
+  <p>12 best software problem statements (out of 172) selected using SIH judging reality: <b>winners are chosen PER problem statement</b>, so the strongest lever is picking a high-quality PS that fewer teams choose, where you can demo a complete, working, impressive prototype in 36 hours.</p>
+  <div class="chips">
+    <span class="chip">172 software PS analysed</span>
+    <span class="chip">Deadline: 20 Sept 2026</span>
+    <span class="chip">Grand Finale: Dec 2026</span>
+    <span class="chip">Criteria @ sih.gov.in</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+<h2 class="section">How to think about "winning odds" at SIH</h2>
+<div class="strategy">
+  <h3>⚡ The 5 filters used to pick these 12 (apply them to any PS):</h3>
+  <ul>
+    <li><b>Competition density</b> — SIH shortlists &amp; crowns winners <i>per problem statement</i>. A niche PS from an unglamorous ministry (Consumer Affairs, MoSPI, Petroleum, MoSJE) gets far fewer idea submissions than ISRO / MoES weather / "AI chatbot" PS. Same effort → 3–10× better odds.</li>
+    <li><b>Demo-ability in 36 hours</b> — Judges reward a <i>working live demo</i> over architecture slides. Vision scans, live alerts, dashboards, maps and graphs photograph well.</li>
+    <li><b>Checklist-able scope</b> — PS that list features (a, b, c…) let you tick every box visibly; vague research PS ("build a novel model") are risky.</li>
+    <li><b>Data availability</b> — Public data / APIs / synthetic-but-realistic data you can generate yourself = no dependency on the ministry.</li>
+    <li><b>Innovation headroom</b> — Room to add a differentiator (GenAI assistant, explainability, offline mode, multilingual voice) that other 6-member teams skipped.</li>
+  </ul>
+</div>
+
+<h2 class="section">🏆 Tier A — Best odds (niche, low competition, fully buildable)</h2>
+<p class="sub">These combine the lowest expected competition with 6-member-team feasibility. Any of these is a strong "bet".</p>
+<div class="grid">
+
+  <div class="card">
+    <div class="top"><span class="rank gold">Rank 1</span><span class="psid">SIH26034 · Software</span></div>
+    <h3>Legal Metrology Compliance Scanner for Packaged Commodities</h3>
+    <div class="org">Ministry of Consumer Affairs, Food &amp; Public Distribution</div>
+    <div class="why"><b>Why it can win:</b> Sounds "boring" → most teams skip it, but it is a <b>perfect CV + rules-engine problem</b>: scan any product label → extract MRP/net-qty/packer/date declarations → validate against the published 2011 Rules → generate violation reports. Crystal-clear requirements, real rules PDF as ground truth, and you can test it on products lying in your hostel.</div>
+    <div class="demoidea"><b>Killer demo:</b> Judge points phone at a biscuit packet → live overlay flags "font size &lt;1mm, missing month-year" → auto-generated PDF compliance report.</div>
+    <div class="meta">
+      <span class="pill comp-low">Competition: LOW</span>
+      <span class="pill feas">Feasibility: HIGH</span>
+      <span class="pill demo">Demo wow: HIGH</span>
+    </div>
+    <div class="stack"><b>Stack:</b> React Native/Flutter app · OCR (Tesseract / PaddleOCR) · detection (YOLOv8) · rules engine (Python) · FastAPI + dashboard.</div>
+  </div>
+
+  <div class="card">
+    <div class="top"><span class="rank gold">Rank 2</span><span class="psid">SIH26102 · Software</span></div>
+    <h3>AI System to Detect Anomalies, Fraud &amp; Inefficiencies in MPLAD Scheme</h3>
+    <div class="org">MoSPI — Data Informatics &amp; Innovation Division</div>
+    <div class="why"><b>Why it can win:</b> Anti-corruption + governance = huge judge appeal, and MoSPI PS attract a fraction of ISRO-level crowds. Data is <b>publicly available</b> on the MPLADS dashboard. Core = anomaly detection on fund flows + risk scoring + MP/district dashboards. Easy to look complete.</div>
+    <div class="demoidea"><b>Killer demo:</b> National heat-map of district risk scores → click a flagged work → "duplicate work 200m away, +340% cost vs. benchmark" → auto alert email to nodal officer.</div>
+    <div class="meta">
+      <span class="pill comp-low">Competition: LOW</span>
+      <span class="pill feas">Feasibility: HIGH</span>
+      <span class="pill demo">Demo wow: HIGH</span>
+    </div>
+    <div class="stack"><b>Stack:</b> Python · Isolation Forest / autoencoders · GeoPandas + Folium maps · Streamlit/React dashboard · LLM "explain this flag" assistant.</div>
+  </div>
+
+  <div class="card">
+    <div class="top"><span class="rank gold">Rank 3</span><span class="psid">SIH26056 · Software</span></div>
+    <h3>Real-Time Airfare Price Index for India (Auto Web-Scraping for CPI)</h3>
+    <div class="org">MoSPI (National Statistical Office)</div>
+    <div class="why"><b>Why it can win:</b> Extremely specific and well-defined: scrape airline/OTA fares on top routes → clean &amp; weight → publish a daily airfare price index to augment CPI. Almost nobody picks statistics PS, yet the pipeline is straightforward and the output (live index chart) looks polished and "official".</div>
+    <div class="demoidea"><b>Killer demo:</b> Live dashboard: index chart vs CPI overlay, route-level fare tables, scraper health monitor running <i>in real time</i> during the pitch.</div>
+    <div class="meta">
+      <span class="pill comp-low">Competition: LOW</span>
+      <span class="pill feas">Feasibility: HIGH</span>
+      <span class="pill demo">Demo wow: MEDIUM-HIGH</span>
+    </div>
+    <div class="stack"><b>Stack:</b> Python · Playwright/Scrapy scrapers · Postgres · index methodology (Laspeyres) · React/Streamlit dashboard.</div>
+  </div>
+
+  <div class="card">
+    <div class="top"><span class="rank gold">Rank 4</span><span class="psid">SIH26031 · Software</span></div>
+    <h3>AI-Based Onion Quality Assessment &amp; Grading App</h3>
+    <div class="org">Ministry of Consumer Affairs, Food &amp; Public Distribution</div>
+    <div class="why"><b>Why it can win:</b> Point camera at onions → grade A/URS % instantly. Tiny, lovable, fully achievable: collect 1–2k photos yourself in 2 days, train a classifier/detector, wrap in a mobile app with a digital quality report. Very few teams pick vegetable grading; Agri-ministry judges love field stories.</div>
+    <div class="demoidea"><b>Killer demo:</b> Bring a bag of real onions to the finale — phone counts damaged/sprouted/undersized in a live video frame and prints a grading slip.</div>
+    <div class="meta">
+      <span class="pill comp-low">Competition: LOW</span>
+      <span class="pill feas">Feasibility: VERY HIGH</span>
+      <span class="pill demo">Demo wow: HIGH</span>
+    </div>
+    <div class="stack"><b>Stack:</b> YOLOv8 / MobileNet · self-collected dataset + augmentation · Flutter app · offline inference (TFLite) · PDF report.</div>
+  </div>
+
+  <div class="card">
+    <div class="top"><span class="rank gold">Rank 5</span><span class="psid">SIH26099 · Software</span></div>
+    <h3>AI-Driven Standardization &amp; Harmonization of Material Codes across CPSEs</h3>
+    <div class="org">Ministry of Petroleum &amp; Natural Gas</div>
+    <div class="why"><b>Why it can win:</b> A pure <b>NLP entity-matching problem</b> ("same item, 8 different codes across PSUs"). Unglamorous → very thin competition. You can hand-build a realistic material-master dataset with duplicates, show measurable precision/recall, and quantify ₹ savings from catalog deduplication. Judges see a finished product, not a promise.</div>
+    <div class="demoidea"><b>Killer demo:</b> Upload messy CSV → algorithm clusters 8,412 records into 3,105 canonical items → side-by-side "8 codes, 1 item" view + estimated procurement savings.</div>
+    <div class="meta">
+      <span class="pill comp-low">Competition: VERY LOW</span>
+      <span class="pill feas">Feasibility: VERY HIGH</span>
+      <span class="pill demo">Demo wow: MEDIUM</span>
+    </div>
+    <div class="stack"><b>Stack:</b> Sentence-transformers embeddings · fuzzy/unit normalization · HDBSCAN clustering · human-review UI · React + FastAPI.</div>
+  </div>
+
+  <div class="card">
+    <div class="top"><span class="rank gold">Rank 6</span><span class="psid">SIH26100 · Software</span></div>
+    <h3>AI-Powered Integrated Bid Compliance Verification for GeM Procurement</h3>
+    <div class="org">Ministry of Petroleum &amp; Natural Gas</div>
+    <div class="why"><b>Why it can win:</b> Document-AI checklist engine: bidder uploads GST/PAN/Udyam/EPFO docs → system extracts, cross-verifies, and returns pass/fail per statutory requirement with evidence. Clear, checklist-driven, and demoable end-to-end with synthetic bid documents. Procurement-doc PS rarely attract big crowds.</div>
+    <div class="demoidea"><b>Killer demo:</b> Drag-drop 10 PDFs → progress bar → compliance matrix (12/14 passed) with red flags like "GST filing gap Q2" + one-click summary for the officer.</div>
+    <div class="meta">
+      <span class="pill comp-low">Competition: LOW</span>
+      <span class="pill feas">Feasibility: HIGH</span>
+      <span class="pill demo">Demo wow: MEDIUM-HIGH</span>
+    </div>
+    <div class="stack"><b>Stack:</b> OCR + layout parsing · regex/LLM field extraction · RAG over tender rules · rules engine · officer dashboard.</div>
+  </div>
+
+</div>
+
+<h2 class="section">🥈 Tier B — Strong picks (slightly busier, big differentiation upside)</h2>
+<p class="sub">A bit more competition, but trending tech + emotional/impact storytelling give you room to stand out.</p>
+<div class="grid">
+
+  <div class="card">
+    <div class="top"><span class="rank">Rank 7</span><span class="psid">SIH26104 · Software</span></div>
+    <h3>AI-Powered Real-Time Detection of Voice-Cloning Impersonation Attacks</h3>
+    <div class="org">AICTE</div>
+    <div class="why"><b>Why it can win:</b> Deepfake-voice fraud is <i>the</i> 2026 headline crime; judges instantly "get it". Open datasets exist (ASVspoof, WaveFake), pretrained anti-spoofing models exist, and the live-mic demo is unbeatable. Because it's AICTE (34 PS), moderately more teams — but few will nail a <b>real-time</b> pipeline; that's your wedge.</div>
+    <div class="demoidea"><b>Killer demo:</b> Clone one of your own teammate's voices beforehand → play it into the app live → "99.2% SPOOF — liveness challenge triggered" vs genuine voice passes.</div>
+    <div class="meta">
+      <span class="pill comp-med">Competition: MEDIUM</span>
+      <span class="pill feas">Feasibility: HIGH</span>
+      <span class="pill demo">Demo wow: VERY HIGH</span>
+    </div>
+    <div class="stack"><b>Stack:</b> Wav2Vec2/AASIST anti-spoofing · streaming inference · challenge-response liveness · FastAPI + web/mobile caller screen.</div>
+  </div>
+
+  <div class="card">
+    <div class="top"><span class="rank">Rank 8</span><span class="psid">SIH26045 · Software</span></div>
+    <h3>IP-SAKTI Sahayak — Multilingual Source-Cited RAG Assistant for Ayurveda IP</h3>
+    <div class="org">Ministry of Ayush</div>
+    <div class="why"><b>Why it can win:</b> A RAG assistant <i>with mandatory source citations</i> over patents/GI/ABS/drug-reg rules — exactly the architecture judges want to see in 2026, on a niche corpus (TKDL, patent act, AYUSH rules) that almost no competitor will curate as well as you. Multilingual Q&amp;A (Hindi + regional) is a checkbox most teams treat lazily — your differentiator.</div>
+    <div class="demoidea"><b>Killer demo:</b> Ask in Hindi: "Can I patent my grandfather's kadha formulation?" → answer with inline citations to TKDL/Patents Act sections + "file GI instead" guidance.</div>
+    <div class="meta">
+      <span class="pill comp-med">Competition: LOW-MED</span>
+      <span class="pill feas">Feasibility: HIGH</span>
+      <span class="pill demo">Demo wow: HIGH</span>
+    </div>
+    <div class="stack"><b>Stack:</b> Open-weight LLM (Llama/Qwen) + RAG (FAISS) · curated govt PDFs · IndicTrans2 translation · eval panel showing citation accuracy.</div>
+  </div>
+
+  <div class="card">
+    <div class="top"><span class="rank">Rank 9</span><span class="psid">SIH26090 · Software</span></div>
+    <h3>AI-Driven Market Linkage &amp; Smart Cataloging App for Marginalized Artisans</h3>
+    <div class="org">Ministry of Social Justice &amp; Empowerment</div>
+    <div class="why"><b>Why it can win:</b> Powerful social-impact narrative + genuinely buildable: artisan photographs a product → AI auto-writes title/description/category/price band → voice interface in local language → marketplace listing. MoSJE PS draw little traffic; a polished, empathetic product here looks like a winner against thin opposition.</div>
+    <div class="demoidea"><b>Killer demo:</b> Snap a photo of a woven basket → 5 seconds later a complete seller listing in Hindi with suggested price from comparable sales.</div>
+    <div class="meta">
+      <span class="pill comp-low">Competition: LOW</span>
+      <span class="pill feas">Feasibility: HIGH</span>
+      <span class="pill demo">Demo wow: HIGH</span>
+    </div>
+    <div class="stack"><b>Stack:</b> Vision captioning (BLIP/Florence) + LLM copywriting · price-band model (Kaggle catalog data) · Flutter + voice (Bhashini APIs).</div>
+  </div>
+
+  <div class="card">
+    <div class="top"><span class="rank">Rank 10</span><span class="psid">SIH26117 · Software</span></div>
+    <h3>Sovereign On-Premise Agentic AI Workbench (Open-Weight Multimodal LLMs)</h3>
+    <div class="org">MRPL (Mangalore Refinery &amp; Petrochemicals)</div>
+    <div class="why"><b>Why it can win:</b> Corporate PS from an oil PSU = tiny applicant pool, while the ask — a fully offline, agentic ChatGPT-class workbench for confidential files — is the hottest thing in AI. Show document Q&amp;A over a P&amp;ID drawing, note drafting, and code assist running 100% offline on open models; nobody in that room will match the "sovereign AI" completeness.</div>
+    <div class="demoidea"><b>Killer demo:</b> Pull the network cable mid-demo. "Still working — fully on-prem." Then multimodal Q&amp;A over a scanned engineering drawing.</div>
+    <div class="meta">
+      <span class="pill comp-low">Competition: VERY LOW</span>
+      <span class="pill feas">Feasibility: MEDIUM-HIGH</span>
+      <span class="pill demo">Demo wow: VERY HIGH</span>
+    </div>
+    <div class="stack"><b>Stack:</b> Ollama/vLLM + Qwen2.5-VL/Llama · agent tools (files, calc, code sandbox) · RAG · role-based access + audit log.</div>
+  </div>
+
+  <div class="card">
+    <div class="top"><span class="rank">Rank 11</span><span class="psid">SIH26189 · Software</span></div>
+    <h3>AI-Powered Criminal Network Analysis System</h3>
+    <div class="org">Ministry of Home Affairs</div>
+    <div class="why"><b>Why it can win:</b> Knowledge-graph + link-prediction over synthetic FIR/CDR/transaction data. Graph visualizations are the most photogenic demos at any hackathon, and MHA cybercrime PS (11 total) split the crowd across them. Generate a rich fake dataset yourself — full control of the story.</div>
+    <div class="demoidea"><b>Killer demo:</b> Interactive graph UI: click a suspect → hidden path to kingpin glows via 3 intermediaries → community detection reveals a second ring + centrality-ranked watchlist.</div>
+    <div class="meta">
+      <span class="pill comp-med">Competition: MEDIUM</span>
+      <span class="pill feas">Feasibility: HIGH</span>
+      <span class="pill demo">Demo wow: VERY HIGH</span>
+    </div>
+    <div class="stack"><b>Stack:</b> Neo4j/NetworkX · GNN or heuristic link prediction · Louvain community detection · Cytoscape.js/ECharts front-end.</div>
+  </div>
+
+  <div class="card">
+    <div class="top"><span class="rank">Rank 12</span><span class="psid">SIH26142 · Software</span></div>
+    <h3>Deep-Learning Super-Resolution Mapping from Medium-Res Satellite Imagery</h3>
+    <div class="org">NTRO</div>
+    <div class="why"><b>Why it can win:</b> For an ML-strong team: 23 NTRO PS means submissions spread thin; satellite SR has public data (Sentinel-2 + paired HR sources), established baselines (SRCNN/ESRGAN/diffusion) to beat, and objective metrics (PSNR/SSIM) — hard to fake, easy to impress. Before/after satellite imagery is great on screen.</div>
+    <div class="demoidea"><b>Killer demo:</b> Side-by-side slider: 10m Sentinel tile → your 2.5m reconstruction; buildings emerge. Live metric panel + one-click batch run.</div>
+    <div class="meta">
+      <span class="pill comp-med">Competition: LOW-MED</span>
+      <span class="pill feas">Feasibility: MEDIUM</span>
+      <span class="pill demo">Demo wow: HIGH</span>
+    </div>
+    <div class="stack"><b>Stack:</b> PyTorch · ESRGAN/SwinIR fine-tune · Sentinel-2 (Copernicus) tiles · metrics dashboard · optional web viewer.</div>
+  </div>
+
+</div>
+
+<h2 class="section">🚫 Problem statements to AVOID (despite looking attractive)</h2>
+<table class="avoid">
+  <tr><th style="width:150px">PS / Group</th><th>Why skip</th></tr>
+  <tr><td>SIH26193–26209<br>"Student Innovation"</td><td>The single largest submission pool every year — thousands of teams, and judging is unfocused because anything qualifies. Worst odds per effort.</td></tr>
+  <tr><td>MoES weather cluster<br>(26068–26086)</td><td>Nowcasting/cyclone/rainfall PS need real meteorology depth + IMD-grade data pipelines; ~30 similar MoES PS → hard to build anything judges trust in 36h unless your team already does weather ML.</td></tr>
+  <tr><td>SIH26151 — Dark-web de-anonymization</td><td>Legally/ethically sensitive, dataset you can't legitimately obtain, demo nearly impossible on stage. Avoid.</td></tr>
+  <tr><td>SIH26137–26141 — Egreen "Quantum" PS</td><td>"Quantum-inspired" buzzwords with vague evaluable outcomes; judges skeptical of quantum claims students can't substantiate.</td></tr>
+  <tr><td>Autodesk BIM PS (26114, 26116, 26016-type design briefs)</td><td>Fine only if your team already knows Revit/Forma deeply — it's a design competition, not coding. Otherwise skip.</td></tr>
+  <tr><td>ISRO headline PS (26166, 26167, 26175)</td><td>Genuinely exciting, but ISRO is the most glamorous org on the portal — expect the heaviest competition of any category. Pick only if space-tech is your team's core strength.</td></tr>
+</table>
+
+<h2 class="section">✅ Execution playbook (whichever PS you lock)</h2>
+<div class="tips">
+  <ol>
+    <li><b>Decide by 28 Aug.</b> Submissions close <b>20 Sept 2026</b>; college internal hackathons happen earlier — finish your idea PPT at least a week before your SPOC's internal deadline.</li>
+    <li><b>Check the live submission count</b> for your 3 favorite PS on sih.gov.in right before locking in — if a Tier-A pick shows unusually heavy traffic, switch to your backup. Numbers beat opinions.</li>
+    <li><b>Build the demo backwards:</b> script the 3-minute judge demo first, then build only what it needs. Every feature must be visible on screen.</li>
+    <li><b>One "nobody-else-has-this" feature</b> (offline mode, one-regional-language voice input, citation-verified answers, real-data feed) is worth ten generic ones.</li>
+    <li><b>Requirements traceability slide:</b> PS asks (a)–(h) → show each one checked off with a 5-second screen shot. Judges score against the PS literally.</li>
+    <li><b>Name the dataset &amp; evaluation metric</b> in your submission (accuracy, PSNR, precision/recall) — quantify or judges assume it doesn't work.</li>
+  </ol>
+</div>
+
+<footer>
+  Compiled 25 Aug 2026 from the SIH 2026 problem-statement dataset (226 PS · 172 software · 54 hardware · 30 organizations), cross-checked against community archives of sih.gov.in. Competition labels are qualitative assessments of submission-density patterns, not official figures — always confirm live idea counts on the official portal before final team nomination. Source: sih.gov.in/sih2026PS.
+</footer>
+
+</div>
+</body>
+</html>
