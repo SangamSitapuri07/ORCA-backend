@@ -176,6 +176,10 @@ def route_advisory(from_lat: float, from_lon: float,
     pts = _sample_points(rc["legs"])
 
     # Parallel fetches — 5 points × the cached marine+weather pair.
+    # PER-POINT deadline: a slow worker must mark ITS point 'unknown',
+    # never take the whole analysis down with it (honesty contract:
+    # partial real answers beat one red exception).
+    PER_POINT_TIMEOUT_SEC = 35
     forecasts: dict[int, Any] = {}
     failed: dict[int, str] = {}
 
@@ -185,10 +189,21 @@ def route_advisory(from_lat: float, from_lon: float,
         except Exception as e:  # noqa: BLE001
             failed[i] = f"{type(e).__name__}: {e}"
 
-    with ThreadPoolExecutor(max_workers=min(4, len(pts))) as ex:
-        futs = [ex.submit(one, i, p) for i, p in enumerate(pts)]
-        for f in as_completed(futs, timeout=90):
-            _ = f  # results captured in dicts; timeout guards a hung worker
+    ex = ThreadPoolExecutor(max_workers=min(5, len(pts)))
+    try:
+        futs = {ex.submit(one, i, p): i for i, p in enumerate(pts)}
+        for fut in as_completed(futs):
+            try:
+                fut.result(timeout=PER_POINT_TIMEOUT_SEC)
+            except Exception as e:  # noqa: BLE001
+                i = futs[fut]
+                if i not in failed:  # worker exception already recorded
+                    failed[i] = f"{type(e).__name__}: {e}"
+    finally:
+        # HUNG worker must not hang the HTTP request: don't wait for it,
+        # cancel anything not yet started, let it die with the process.
+        # Its point already shows 'unknown' honestly in the response.
+        ex.shutdown(wait=False, cancel_futures=True)
 
     rows, states = [], []
     sources_used: list[str] = []
