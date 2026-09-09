@@ -41,6 +41,9 @@ endpoints ka poora hisaab.
 | `/api/v1/advisory` | bilingual skipper advisory — WMO/IMD small-craft thresholds |
 | `/api/v1/field` · `/layers` · `/tiles` | field explorer + server-rendered PNG data tiles |
 | `/api/v1/route-check` | course verified every 2 km vs the real GLOBE 1 km land mask; blocked → one REAL computed detour waypoint |
+| `/api/v1/voyage` | **voyage planner** — "TU analyze kar: kahan jaun?"
+  today's official INCOIS PFZ lines + NOAA chlorophyll hotspots, each
+  gated by live forecast at that exact spot; auditable score per card |
 | `/api/v1/route-advisory` | **transit verdict**: the verified course sampled every ~30 km, live marine forecast per point in parallel, folded worst-case → `go / caution / nogo / unknown` + safest departure window |
 | `/api/v1/alerts` · `/agents` · `/datasets` · `/zones` · `/chat` · `/feedback` | alerts feed, agent registry, provenance, LLM chat (optional), feedback |
 
@@ -66,7 +69,8 @@ python -m pytest pipeline/tests -q     # 226 passed · +9 transit-verdict rules
 backend/       FastAPI app + endpoints (+ its requirements.txt)
 pipeline/      data fetchers, agents, verdict engines, tests (226)
 tools/         verify/demo scripts (live-source diagnostics)
-docs/          MOSDAC guides, CHL diagnostics, research
+docs/          MOSDAC guides, CHL diagnostics, research,
+               API-GUIDE.md, VOYAGE-PLANNER.md (research & design)
 RUNBOOK.md     full-stack run guide (sister repo has the frontends)
 start-backend.ps1
 ```

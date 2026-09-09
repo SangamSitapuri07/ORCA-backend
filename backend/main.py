@@ -592,6 +592,28 @@ def route_advisory(
         raise HTTPException(status_code=500, detail=f"route advisory failed: {type(e).__name__}: {e}")
 
 
+@app.get("/api/v1/voyage")
+def voyage_recommend(
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+    max_km: float = Query(120.0, ge=20.0, le=400.0),
+) -> dict[str, Any]:
+    """"TU analyze kar ke bata — kahan jaun?" Recommends fishing
+    destinations from REAL sources only: today's official INCOIS PFZ
+    advisory lines (nearest point on each actual line) + land-masked
+    NOAA chlorophyll hotspots, each gated by the live marine forecast
+    at that exact spot. Score is fully auditable (reasons list per
+    candidate); safety state comes from the same advisory thresholds.
+    Zero invented points — if sources fail, found:false + reasons."""
+    from pipeline.ttlcache import cached
+    from pipeline.voyage import recommend
+    key = f"voyage:{lat:.3f}:{lon:.3f}:{max_km:.0f}"
+    try:
+        return cached(key, 1800, lambda: recommend(lat, lon, max_km))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"voyage failed: {type(e).__name__}: {e}")
+
+
 @app.get("/api/v1/tiles/{z}/{x}/{y}.png")
 def osm_tile(z: int, x: int, y: int):
     """Cached OpenStreetMap raster tile (PNG)."""
