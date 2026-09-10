@@ -135,6 +135,8 @@ nahi bolte).
 | MOSDAC download | **24 s wall cap**, 10-min cool-down | GOI link slow — app kabhi latkti nahi |
 | GFW 429 burst | 15 s wait, **retry exactly once** | token quota respect |
 | chlorophyll lags | today → 3d → 7d (DINEOF ≤ 14 d) | satellite reality ke saath honest |
+| ⭐ **last-known-good fallback** (NOAA·OC-CCI·MOSDAC·INCOIS·GFW) | success yaad rehti hai **6 h** | live hiccup (baadal/server slow) pe hard-fail nahi — last REAL reading, `_stale` + age **likhkar** dikhaya (kabhi fresh jaisa nahi). GFW token/quota error pe fallback NAHI — uska asli fix token hi hai, mask karna imandari nahi |
+| fetch transient retry | 1 retry, 2 s gap | ISP/web-shield TLS hiccup instantly maaf; fail → honest failed |
 
 ## 6. Cross-check khud karo (judge script)
 

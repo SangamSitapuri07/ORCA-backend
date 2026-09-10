@@ -73,6 +73,50 @@ def cached(key: str, ttl_sec: float, fn: Callable[[], T],
                 done.set()
 
 
+# ── last-known-good fallback ────────────────────────────────────────
+#
+# `cached()` above is about not re-fetching within a TTL. This is a
+# different problem: several ORCA sources (NOAA ERDDAP, OC-CCI, MOSDAC,
+# INCOIS, GFW) are flaky *live* satellite/AIS feeds that legitimately
+# fail on any given click (cloud cover, a slow upstream server, a rate
+# limit). Today a failure there is a hard "source failed" card even
+# when we successfully fetched the SAME point an hour ago.
+#
+# This keeps a separate, long-lived "last known good" value per key.
+# On success, the caller stores it here. On failure, the caller can
+# look it up and show it — CLEARLY marked `_stale=True` with its age,
+# never silently presented as fresh — instead of nothing at all.
+
+_stale_lock = threading.Lock()
+_stale_store: dict[str, tuple[float, Any]] = {}
+
+
+def remember_last_good(key: str, value: Any) -> None:
+    """Record `value` as the last known good result for `key`."""
+    with _stale_lock:
+        _stale_store[key] = (time.time(), value)
+
+
+def get_last_good(key: str, max_age_sec: float) -> Any | None:
+    """Return the last known good value for `key` if it's no older than
+    `max_age_sec`, else None. Dict values get `_stale`/`_stale_age_sec`
+    added (on a copy — the stored original is never mutated) so the
+    caller/UI can never mistake this for a fresh live reading."""
+    with _stale_lock:
+        ent = _stale_store.get(key)
+    if ent is None:
+        return None
+    ts, value = ent
+    age = time.time() - ts
+    if age > max_age_sec:
+        return None
+    if isinstance(value, dict):
+        value = dict(value)
+        value["_stale"] = True
+        value["_stale_age_sec"] = round(age)
+    return value
+
+
 def cache_stats() -> dict[str, Any]:
     """Snapshot of what's cached — shown in the app's data-freshness panel."""
     now = time.time()
@@ -91,3 +135,5 @@ def clear() -> None:
     with _lock:
         _store.clear()
         _inflight.clear()
+    with _stale_lock:
+        _stale_store.clear()

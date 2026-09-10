@@ -252,6 +252,12 @@ def get_chlorophyll_with_fallback(
     result = get_chlorophyll(lat, lon, date)
     if result and "value" in result:
         return result
+    # Keep the primary's real reason — the collapsed "all ERDDAP
+    # datasets failed" message below used to erase this, so a genuine
+    # server outage and a cloud-masked-everywhere day looked identical
+    # in the UI. `last_error` on the primary result already carries it.
+    primary_reason = (result or {}).get("last_error") or (result or {}).get("error")
+    backup_last_reason: str | None = None
 
     # Try alternate ERDDAP datasets as backup
     for name, base_url in ERDDAP_BACKUPS.items():
@@ -308,7 +314,18 @@ def get_chlorophyll_with_fallback(
                     "log10": math.log10(nearest) if nearest > 0 else None,
                     "n_samples": n_vals,
                 }
-            except Exception:
+            except Exception as exc:  # noqa: BLE001
+                backup_last_reason = f"{name}: {type(exc).__name__}: {exc}"
                 continue
 
-    return {"error": "all ERDDAP datasets failed", "tried": list(ERDDAP_BACKUPS.keys())}
+    # Surface the most specific reason we actually saw, instead of a
+    # generic string every distinct failure mode collapses into.
+    # NOTE: orca_data.py's _safe()/_gather() detect "this is an error
+    # dict" via `"error" in res and len(res) == 2` — so this must stay
+    # a 2-key dict, with the real reason folded into the `error` string
+    # itself rather than a sibling key that check would miss entirely.
+    reason = backup_last_reason or primary_reason or "no valid data at any dataset"
+    return {
+        "error": f"all ERDDAP datasets failed ({reason})",
+        "tried": list(ERDDAP_BACKUPS.keys()),
+    }

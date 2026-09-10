@@ -45,7 +45,20 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from pipeline import ttlcache
 from pipeline.openmeteo_sst import get_sst_at_point
+
+# How long a "last known good" value stays eligible as a stale
+# fallback when the live source fails outright. 6h: long enough that
+# a flaky server hiccup on THIS click doesn't lose data a click an
+# hour ago successfully fetched, short enough that "stale" still
+# means something on a fast-moving ocean surface.
+STALE_FALLBACK_MAX_AGE_SEC = 6 * 3600
+
+
+def _grid_key(lat: float, lon: float) -> str:
+    """~1km-ish rounding so nearby clicks share a stale fallback."""
+    return f"{round(lat, 2)}:{round(lon, 2)}"
 
 # Per-source timeout. If a source takes longer than this, we move on
 # without it. The full snapshot completes in ~sum-of-timeouts in the
@@ -364,20 +377,43 @@ def zone_snapshot(
             else:
                 err_noaa = err3 or err2 or err_noaa or "NOAA: no data"
 
+    noaa_key = f"noaa:{_grid_key(lat, lon)}"
+    if not got_noaa and noaa_fn is not None:
+        # Live fetch (+ 3-day-lag, + 7-day-lag) all came back empty.
+        # Before reporting a hard failure, check whether we successfully
+        # read this same spot recently — cloud cover / a dead ERDDAP
+        # instance doesn't mean the last good reading is wrong yet.
+        stale = ttlcache.get_last_good(noaa_key, STALE_FALLBACK_MAX_AGE_SEC)
+        if stale and stale.get("value") is not None:
+            chl = stale
+            got_noaa = True
+            attempt_date = stale.get("date", chl_date)
+
     if got_noaa and isinstance(chl, dict):
         snap["chlorophyll"] = chl.get("value")
         snap["chlorophyll_unit"] = chl.get("units", "mg/m^3")
         snap["chlorophyll_source"] = chl.get("source", "NOAA ERDDAP DINEOF")
         snap["chlorophyll_date"] = attempt_date
-        if attempt_date != chl_date:
+        if chl.get("_stale"):
             snap["chlorophyll_note"] = (
-                f"Requested date had no product yet (satellite lag); "
-                f"showing {attempt_date} analysis instead."
+                f"Live NOAA ERDDAP unavailable right now; showing the last "
+                f"successful reading from {chl['_stale_age_sec'] // 60} min ago."
             )
+            snap["data_sources_used"].append(
+                f"NOAA ERDDAP (chlorophyll, cached {chl['_stale_age_sec'] // 60}m old)"
+            )
+        else:
+            if attempt_date != chl_date:
+                snap["chlorophyll_note"] = (
+                    f"Requested date had no product yet (satellite lag); "
+                    f"showing {attempt_date} analysis instead."
+                )
+            snap["data_sources_used"].append(f"NOAA ERDDAP (chlorophyll, {attempt_date})")
         if chl.get("box_min") is not None:
             snap["chlorophyll_box_min"] = chl["box_min"]
             snap["chlorophyll_box_max"] = chl["box_max"]
-        snap["data_sources_used"].append(f"NOAA ERDDAP (chlorophyll, {attempt_date})")
+        if not chl.get("_stale"):
+            ttlcache.remember_last_good(noaa_key, chl)
     elif noaa_fn is not None:
         snap["data_sources_failed"].append(err_noaa or "NOAA: no data")
 
@@ -385,10 +421,26 @@ def zone_snapshot(
     # has nothing but OC-CCI does, promote it to the primary chlorophyll
     # (honest, independent dataset) before resorting to INCOIS.
     if occci_fn is not None:
+        occci_key = f"occci:{_grid_key(lat, lon)}"
         occci, err = results.get("occci", (None, "ESA OC-CCI: not run"))
-        if occci and not err and occci.get("value") is not None:
+        got_occci = bool(occci and not err and occci.get("value") is not None)
+        if not got_occci:
+            # Cloud-masked-everywhere and dead-server both land here; a
+            # recent successful reading is still more useful than nothing.
+            stale = ttlcache.get_last_good(occci_key, STALE_FALLBACK_MAX_AGE_SEC)
+            if stale and stale.get("value") is not None:
+                occci = stale
+                got_occci = True
+        if got_occci and isinstance(occci, dict):
             snap["chlorophyll_occci"] = occci.get("value")
             snap["chlorophyll_occci_source"] = occci.get("source", "ESA OC-CCI")
+            if occci.get("_stale"):
+                snap["chlorophyll_occci_note"] = (
+                    f"Live OC-CCI unavailable; showing a reading from "
+                    f"{occci['_stale_age_sec'] // 60} min ago."
+                )
+            else:
+                ttlcache.remember_last_good(occci_key, occci)
             if "chlorophyll" not in snap:
                 snap["chlorophyll"] = occci.get("value")
                 snap["chlorophyll_unit"] = occci.get("units", "mg/m^3")
@@ -407,19 +459,41 @@ def zone_snapshot(
     # like OC-CCI; never masks NOAA as primary, but its presence lets the
     # satellite agent do a NOAA vs ESA vs ISRO three-way comparison. 🇮🇳
     if mosdac_fn is not None:
+        mosdac_key = f"mosdac:{_grid_key(lat, lon)}"
         mosdac, merr = results.get("mosdac", (None, "MOSDAC OCM-3: not run"))
-        if mosdac and not merr and mosdac.get("value") is not None:
+        got_mosdac = bool(mosdac and not merr and mosdac.get("value") is not None)
+        if not got_mosdac:
+            # The live chain (login+search+download+extract) is the
+            # slowest, most failure-prone source in the whole pipeline
+            # (see JOB_BUDGET_SEC note above) — this is where a stale
+            # fallback earns its keep the most.
+            stale = ttlcache.get_last_good(mosdac_key, STALE_FALLBACK_MAX_AGE_SEC)
+            if stale and stale.get("value") is not None:
+                mosdac = stale
+                got_mosdac = True
+        if got_mosdac and isinstance(mosdac, dict):
             snap["chlorophyll_mosdac"] = mosdac.get("value")
             snap["chlorophyll_mosdac_source"] = mosdac.get("source", "ISRO MOSDAC")
             snap["chlorophyll_mosdac_date"] = mosdac.get("date")
-            if mosdac.get("note"):
-                snap["chlorophyll_mosdac_note"] = mosdac["note"]
+            if mosdac.get("_stale"):
+                snap["chlorophyll_mosdac_note"] = (
+                    f"Live MOSDAC fetch unavailable this click (see 'Failed "
+                    f"sources' for why); showing the last successful granule "
+                    f"read {mosdac['_stale_age_sec'] // 60} min ago."
+                )
+            else:
+                if mosdac.get("note"):
+                    snap["chlorophyll_mosdac_note"] = mosdac["note"]
+                ttlcache.remember_last_good(mosdac_key, mosdac)
             # pixel forensics for the satellite agent's skepticism tiers
             for k in ("pixel_km", "ring_valid", "ring_median",
                       "area_median", "area_valid", "cdom_value", "cdom_units"):
                 if mosdac.get(k) is not None:
                     snap[f"chlorophyll_mosdac_{k}"] = mosdac[k]
-            snap["data_sources_used"].append("ISRO MOSDAC OCM-3 (chlorophyll, live 🇮🇳)")
+            label = "ISRO MOSDAC OCM-3 (chlorophyll, live 🇮🇳)" if not mosdac.get("_stale") else (
+                f"ISRO MOSDAC OCM-3 (chlorophyll, cached {mosdac['_stale_age_sec'] // 60}m old 🇮🇳)"
+            )
+            snap["data_sources_used"].append(label)
         else:
             snap["data_sources_failed"].append(
                 merr or (mosdac or {}).get("error") or "MOSDAC OCM-3: no data"
@@ -437,18 +511,51 @@ def zone_snapshot(
             incois_fn = None
             incois_imp_err = e
         if incois_fn is not None:
+            # BUG FIX: this used to call _safe(..., timeout=30) while
+            # incois.get_chlorophyll()'s own SIGALRM deadline defaulted
+            # to 12s — and that SIGALRM never actually fires anyway,
+            # because _safe() runs the call on a ThreadPoolExecutor
+            # worker thread, not the main thread (signal.signal only
+            # works on the main thread). So neither number was the real
+            # timeout; the outer future.result(timeout=...) was the only
+            # thing actually governing it, silently. That produced
+            # timeout error text with a number ("15s" seen in prod) that
+            # doesn't correspond to any timeout in this file.
+            # Fix: pick ONE number, pass it through explicitly to both
+            # layers so the reported timeout is always accurate, and
+            # keep it modest since INCOIS is a best-effort backup, not
+            # a source worth blocking the whole snapshot on.
+            incois_timeout = 15.0
             incois_chl, err = _safe(
                 incois_fn, lat, lon, chl_date,
-                default=None, label="INCOIS LAS", timeout=30,
+                default=None, label="INCOIS LAS", timeout=incois_timeout,
+                timeout_sec=incois_timeout,
             )
-            if incois_chl and not err and incois_chl.get("value") is not None:
+            got_incois = bool(incois_chl and not err and incois_chl.get("value") is not None)
+            incois_key = f"incois:{_grid_key(lat, lon)}"
+            if not got_incois:
+                stale = ttlcache.get_last_good(incois_key, STALE_FALLBACK_MAX_AGE_SEC)
+                if stale and stale.get("value") is not None:
+                    incois_chl = stale
+                    got_incois = True
+            if got_incois and isinstance(incois_chl, dict):
                 snap["chlorophyll"] = incois_chl.get("value")
                 snap["chlorophyll_unit"] = incois_chl.get("units", "mg/m^3")
                 snap["chlorophyll_source"] = incois_chl.get("source", "INCOIS LAS")
                 snap["chlorophyll_date"] = chl_date
-                if incois_chl.get("note"):
-                    snap["chlorophyll_note"] = incois_chl["note"]
-                snap["data_sources_used"].append("INCOIS LAS (backup chlorophyll)")
+                if incois_chl.get("_stale"):
+                    snap["chlorophyll_note"] = (
+                        f"Live INCOIS unavailable; showing a reading from "
+                        f"{incois_chl['_stale_age_sec'] // 60} min ago."
+                    )
+                    snap["data_sources_used"].append(
+                        f"INCOIS LAS (backup chlorophyll, cached {incois_chl['_stale_age_sec'] // 60}m old)"
+                    )
+                else:
+                    if incois_chl.get("note"):
+                        snap["chlorophyll_note"] = incois_chl["note"]
+                    snap["data_sources_used"].append("INCOIS LAS (backup chlorophyll)")
+                    ttlcache.remember_last_good(incois_key, incois_chl)
             else:
                 snap["data_sources_failed"].append(
                     err or (incois_chl or {}).get("error") or "INCOIS: no data"
@@ -459,32 +566,60 @@ def zone_snapshot(
     # 4) GFW fishing effort + fleet composition (fetched in the parallel
     # gather above — just map the results here)
     if include_gfw:
+        # Stale-fallback guard: a token/quota error must NOT be masked
+        # by a cached reading — that just fails again identically next
+        # click, and hiding it delays the real fix. Only genuine
+        # no-data/timeout degrades to last-known-good.
+        def _gfw_authish(err_text: str | None) -> bool:
+            t = (err_text or "").lower()
+            return any(k in t for k in ("token", "quota", "401", "403", "unauthorized", "forbidden"))
+
+        gfw_effort_key = f"gfw_effort:{_grid_key(lat, lon)}"
         effort, err = results.get("gfw_effort", (None, "GFW effort: not run"))
         if effort and not err and "error" in effort:
             err = f"GFW effort: {effort['error']}"  # token invalid/expired/quota — surface honestly
             effort = None
-        if effort and not err:
-            hours = effort.get("hours")
-            if hours is not None:
-                snap["fishing_hours"] = hours
-                snap["vessel_count_effort"] = effort.get("vessel_ids", 0)
-                snap["data_sources_used"].append("Global Fishing Watch (effort)")
-            else:
-                snap["data_sources_failed"].append(
-                    "GFW effort: response has no 'hours' field"
+        got_effort = bool(effort and not err and effort.get("hours") is not None)
+        if not got_effort and not _gfw_authish(err):
+            stale = ttlcache.get_last_good(gfw_effort_key, STALE_FALLBACK_MAX_AGE_SEC)
+            if stale and stale.get("hours") is not None:
+                effort = stale
+                got_effort = True
+        if got_effort:
+            snap["fishing_hours"] = effort.get("hours")
+            snap["vessel_count_effort"] = effort.get("vessel_ids", 0)
+            if effort.get("_stale"):
+                snap["data_sources_used"].append(
+                    f"Global Fishing Watch (effort, cached {effort['_stale_age_sec'] // 60}m old)"
                 )
+            else:
+                snap["data_sources_used"].append("Global Fishing Watch (effort)")
+                ttlcache.remember_last_good(gfw_effort_key, effort)
         else:
             snap["data_sources_failed"].append(err or "GFW effort: no data")
 
+        gfw_fleet_key = f"gfw_fleet:{_grid_key(lat, lon)}"
         fleet, err = results.get("gfw_fleet", (None, "GFW fleet: not run"))
         if fleet and not err and "error" in fleet:
             err = f"GFW fleet: {fleet['error']}"
             fleet = None
-        if fleet and not err and "by_flag" in fleet:
+        got_fleet = bool(fleet and not err and "by_flag" in fleet)
+        if not got_fleet and not _gfw_authish(err):
+            stale = ttlcache.get_last_good(gfw_fleet_key, STALE_FALLBACK_MAX_AGE_SEC)
+            if stale and "by_flag" in stale:
+                fleet = stale
+                got_fleet = True
+        if got_fleet:
             snap["vessel_count"] = fleet.get("vessel_count")
             snap["fleet_by_flag"] = fleet.get("by_flag", {})
             snap["fleet_by_gear"] = fleet.get("by_gear", {})
-            snap["data_sources_used"].append("Global Fishing Watch (fleet)")
+            if fleet.get("_stale"):
+                snap["data_sources_used"].append(
+                    f"Global Fishing Watch (fleet, cached {fleet['_stale_age_sec'] // 60}m old)"
+                )
+            else:
+                snap["data_sources_used"].append("Global Fishing Watch (fleet)")
+                ttlcache.remember_last_good(gfw_fleet_key, fleet)
         else:
             snap["data_sources_failed"].append(err or "GFW fleet: no data")
     else:
