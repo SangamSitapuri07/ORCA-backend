@@ -20,6 +20,7 @@ satellite) actually gave us today.
 """
 from __future__ import annotations
 
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
@@ -31,6 +32,13 @@ TOP_N = 5
 PFZ_BONUS = 20
 BLOOM_BONUS = 10
 PER_POINT_TIMEOUT_SEC = 35
+
+# B14 crowd-spread: GFW fleet pressure is deep-checked only on the
+# current top-3 (quota-friendly), community load on every candidate.
+SPREAD_GFW_TOP = 3
+GFW_RADIUS_DEG = 0.5          # ~50 km half-width pressure box
+GFW_LOOKBACK_DAYS = 30
+GFW_TIMEOUT_SEC = 20
 
 
 # ── pure scoring (test-pinned, network-free) ───────────────────────
@@ -151,6 +159,123 @@ def _hotspot_candidates(lat: float, lon: float, max_km: float,
     return cands
 
 
+# ── B14 crowd-spread ───────────────────────────────────────────────
+
+def _gfw_pressure(lat: float, lon: float) -> dict[str, Any] | None:
+    """REAL global-fleet pressure near the spot (last ~30 days, AIS).
+
+    End date is shifted back 3 days — GFW's processing pipeline lags
+    real time by ~3 days, and _clamp_date_range snaps to dataset range.
+    """
+    from datetime import date, timedelta
+    from pipeline import gfw
+    end = date.today() - timedelta(days=3)
+    start = end - timedelta(days=GFW_LOOKBACK_DAYS - 1)
+    return gfw.get_fishing_effort(lat, lon, start.isoformat(),
+                                  end.isoformat(), radius_deg=GFW_RADIUS_DEG)
+
+
+def _spread(recs: list[dict[str, Any]], notes: list[str]) -> None:
+    """Crowd-aware re-ranking — "sabko same jagah mat bhejo".
+
+    Stage 1 (free, every candidate): OUR OWN community load — how many
+    ORCA fishers were already sent near this cell in the last 24 h.
+    Stage 2 (quota-friendly, top-3 only): GFW AIS fleet hours nearby.
+
+    Both deductions are appended to reasons[] with exact numbers, then
+    recs are re-sorted. The served #1 is recorded anonymously so the
+    NEXT fisher is naturally nudged towards the next-best spot —
+    self-balancing without any user accounts or tracking.
+    """
+    from pipeline import crowd
+    now = time.time()
+
+    # stage 1 — community signal on every candidate (local, instant)
+    for r in recs:
+        info = crowd.load(r["lat"], r["lon"], now)
+        pen = crowd.community_penalty(info["effective"])
+        r["crowd"] = {
+            "level": crowd.level(info["effective"]),
+            "community_recent": info["same_cell"],
+            "community_load": info["effective"],
+            "community_penalty": pen,
+            "gfw_hours_30d": None,
+            "gfw_penalty": 0,
+            "note": None,
+        }
+        if pen > 0:
+            r["reasons"].append(
+                f"👥 {info['same_cell']} ORCA fisher(s) already sent here "
+                f"in 24 h (load {info['effective']:.1f}) −{pen} — spreading"
+            )
+
+    prelim = sorted(recs, key=lambda r: -(r["score"] - r["crowd"]["community_penalty"]))
+    deep = prelim[:SPREAD_GFW_TOP]
+
+    # stage 2 — GFW fleet pressure on the current leaders (parallel)
+    gfw_fail = 0
+    gfw_reason = ""
+
+    def grab(idx: int, r: dict[str, Any]) -> None:
+        try:
+            gfwres[idx] = _gfw_pressure(r["lat"], r["lon"])
+        except Exception as e:  # noqa: BLE001
+            gfwres[idx] = {"error": f"{type(e).__name__}: {e}"}
+
+    gfwres: dict[int, Any] = {}
+    ex = ThreadPoolExecutor(max_workers=max(1, min(3, len(deep))))
+    try:
+        futs = {ex.submit(grab, i, r): i for i, r in enumerate(deep)}
+        for fut in as_completed(futs):
+            try:
+                fut.result(timeout=GFW_TIMEOUT_SEC)
+            except Exception as e:  # noqa: BLE001
+                gfwres[futs[fut]] = {"error": f"{type(e).__name__}: {e}"}
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
+
+    for i, r in enumerate(deep):
+        res = gfwres.get(i)
+        hours = res.get("hours") if isinstance(res, dict) else None
+        if hours is None:
+            gfw_fail += 1
+            err = (res or {}).get("error", "no response") if isinstance(res, dict) else "no response"
+            r["crowd"]["note"] = (f"GFW fleet check unavailable ({err}) — community "
+                                  "signal only, no fleet penalty added (+0)")
+            if not gfw_reason:
+                gfw_reason = str(err)
+            continue
+        press = crowd.gfw_pressure(hours)
+        r["crowd"]["gfw_hours_30d"] = round(hours, 1)
+        r["crowd"]["gfw_penalty"] = press["penalty"]
+        r["crowd"]["level"] = crowd.worst_level(r["crowd"]["level"], press["level"])
+        if press["penalty"] > 0:
+            r["reasons"].append(
+                f"🚢 GFW AIS: {hours:.1f} fleet hrs nearby in 30 d "
+                f"(already fished) −{press['penalty']}")
+        else:
+            r["reasons"].append(
+                f"🚢 GFW AIS: {hours:.1f} fleet hrs nearby in 30 d — uncrowded ±0")
+
+    if gfw_fail:
+        notes.append(f"GFW fleet-pressure check failed for {gfw_fail} spot(s) "
+                     f"({gfw_reason}) — ranked on community + weather signals only")
+
+    # final auditable re-rank: score_base − community − fleet pressure
+    for r in recs:
+        r["score_base"] = r["score"]
+        r["score"] = max(0, r["score_base"]
+                         - r["crowd"]["community_penalty"]
+                         - r["crowd"]["gfw_penalty"])
+    recs.sort(key=lambda r: -r["score"])
+
+    if recs:
+        crowd.record(recs[0]["lat"], recs[0]["lon"], kind=recs[0].get("kind", "hotspot"))
+        if all(r["crowd"]["level"] == "high" for r in recs):
+            notes.append("all near spots are high-pressure right now — showing "
+                         "best available; kal naya PFZ advisory aayega")
+
+
 # ── main entry ─────────────────────────────────────────────────────
 
 def recommend(lat: float, lon: float, max_km: float = 120.0) -> dict[str, Any]:
@@ -222,6 +347,7 @@ def recommend(lat: float, lon: float, max_km: float = 120.0) -> dict[str, Any]:
             "reasons": cands_reasons,
         })
     recs.sort(key=lambda r: -r["score"])
+    _spread(recs, notes)
 
     return {
         "found": True,
@@ -229,14 +355,18 @@ def recommend(lat: float, lon: float, max_km: float = 120.0) -> dict[str, Any]:
         "max_km": max_km,
         "recommendations": recs[:TOP_N],
         "candidates_evaluated": len(pool),
+        "spreading": True,
         "notes": notes,
         "sources": {
             "pfz": "INCOIS PFZ Advisory (GeoServer WFS)",
             "chl": "NOAA ERDDAP (land-masked grid)",
             "weather": "Open-Meteo Marine + Forecast (per-candidate gate)",
+            "fleet": "Global Fishing Watch AIS effort (top-3 spots)",
+            "community": "ORCA anonymous 24 h served-pick cells (0.25°)",
         },
         "scoring": (f"100 base +{PFZ_BONUS} official-PFZ +{BLOOM_BONUS} bloom "
-                    "−80 danger −40 caution −0.15/NM distance; score is ranking "
-                    "ONLY — separate safety state shown per card"),
+                    "−80 danger −40 caution −0.15/NM distance "
+                    "−0-24 community-spread −0-10 GFW fleet pressure; "
+                    "score is ranking ONLY — separate safety state per card"),
         "analyzed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }

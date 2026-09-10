@@ -43,7 +43,12 @@ endpoints ka poora hisaab.
 | `/api/v1/route-check` | course verified every 2 km vs the real GLOBE 1 km land mask; blocked → one REAL computed detour waypoint |
 | `/api/v1/voyage` | **voyage planner** — "TU analyze kar: kahan jaun?"
   today's official INCOIS PFZ lines + NOAA chlorophyll hotspots, each
-  gated by live forecast at that exact spot; auditable score per card |
+  gated by live forecast at that exact spot; auditable score per card.
+  **B14 crowd-spread**: ranked spots are de-scored by (a) GFW AIS fleet
+  hours nearby (30 d, top-3 spots) and (b) ORCA's OWN anonymous
+  community picks (0.25° cells, rolling 24 h) — the served #1 is
+  remembered so the NEXT fisher is nudged to the next-best spot.
+  "Sabko same jagah nahi bhejte" — every deduction listed in reasons[] |
 | `/api/v1/route-advisory` | **transit verdict**: the verified course sampled every ~30 km, live marine forecast per point in parallel, folded worst-case → `go / caution / nogo / unknown` + safest departure window |
 | `/api/v1/alerts` · `/agents` · `/datasets` · `/zones` · `/chat` · `/feedback` | alerts feed, agent registry, provenance, LLM chat (optional), feedback |
 
