@@ -39,6 +39,11 @@ SPREAD_GFW_TOP = 3
 GFW_RADIUS_DEG = 0.5          # ~50 km half-width pressure box
 GFW_LOOKBACK_DAYS = 30
 GFW_TIMEOUT_SEC = 20
+# B15: burst-pause resilience — crowd pressure is remembered per 0.5°
+# cell; when GFW's burst limiter pauses fresh fetches, the last-good
+# hours (≤6 h old) are served WITH an honest age label instead of
+# failing the whole fleet signal.
+CROWD_GFW_STALE_MAX_AGE_SEC = 6 * 3600
 
 
 # ── pure scoring (test-pinned, network-free) ───────────────────────
@@ -161,18 +166,41 @@ def _hotspot_candidates(lat: float, lon: float, max_km: float,
 
 # ── B14 crowd-spread ───────────────────────────────────────────────
 
+def _gfw_cell_key(lat: float, lon: float) -> str:
+    """0.5° crowd-pressure cell — one remembered value serves the area."""
+    return f"crowd:gfwcell:{round(lat * 2) / 2:.1f},{round(lon * 2) / 2:.1f}"
+
+
 def _gfw_pressure(lat: float, lon: float) -> dict[str, Any] | None:
     """REAL global-fleet pressure near the spot (last ~30 days, AIS).
 
     End date is shifted back 3 days — GFW's processing pipeline lags
     real time by ~3 days, and _clamp_date_range snaps to dataset range.
+
+    B15: every success is remembered as the cell's last-good (6 h);
+    a burst-429 / network failure then serves that labelled copy
+    instead of collapsing the whole fleet signal.
     """
     from datetime import date, timedelta
-    from pipeline import gfw
+    from pipeline import gfw, ttlcache
     end = date.today() - timedelta(days=3)
     start = end - timedelta(days=GFW_LOOKBACK_DAYS - 1)
-    return gfw.get_fishing_effort(lat, lon, start.isoformat(),
-                                  end.isoformat(), radius_deg=GFW_RADIUS_DEG)
+    res = gfw.get_fishing_effort(lat, lon, start.isoformat(),
+                                 end.isoformat(), radius_deg=GFW_RADIUS_DEG)
+    key = _gfw_cell_key(lat, lon)
+    if isinstance(res, dict) and res.get("hours") is not None and "error" not in res:
+        try:
+            ttlcache.remember_last_good(key, res)
+        except Exception:  # noqa: BLE001 — remember karna optional hai
+            pass
+        return res
+    try:
+        stale = ttlcache.get_last_good(key, CROWD_GFW_STALE_MAX_AGE_SEC)
+    except Exception:  # noqa: BLE001
+        stale = None
+    if isinstance(stale, dict) and stale.get("hours") is not None:
+        return stale  # carries _stale / _stale_age_sec honesty labels
+    return res
 
 
 def _spread(recs: list[dict[str, Any]], notes: list[str]) -> None:
@@ -216,9 +244,26 @@ def _spread(recs: list[dict[str, Any]], notes: list[str]) -> None:
     gfw_fail = 0
     gfw_reason = ""
 
+    # B15: burst-pause precheck — if GFW already told us to wait, DO NOT
+    # fire any HTTP at all; only the remembered cell pressure may answer.
+    # (One angry burst window must not be hammered by 3 fresh calls.)
+    try:
+        from pipeline import gfw as _gfw_mod
+        _paused = float(_gfw_mod._rate_limit_remaining())
+    except Exception:  # noqa: BLE001
+        _paused = 0.0
+
     def grab(idx: int, r: dict[str, Any]) -> None:
         try:
-            gfwres[idx] = _gfw_pressure(r["lat"], r["lon"])
+            if _paused > 0:
+                from pipeline import ttlcache as _tc
+                stale = _tc.get_last_good(_gfw_cell_key(r["lat"], r["lon"]),
+                                          CROWD_GFW_STALE_MAX_AGE_SEC)
+                gfwres[idx] = stale if isinstance(stale, dict) else {
+                    "error": (f"GFW burst-pause active (~{int(_paused)}s left), "
+                              "no remembered fleet pressure for this cell yet")}
+            else:
+                gfwres[idx] = _gfw_pressure(r["lat"], r["lon"])
         except Exception as e:  # noqa: BLE001
             gfwres[idx] = {"error": f"{type(e).__name__}: {e}"}
 
@@ -249,6 +294,10 @@ def _spread(recs: list[dict[str, Any]], notes: list[str]) -> None:
         r["crowd"]["gfw_hours_30d"] = round(hours, 1)
         r["crowd"]["gfw_penalty"] = press["penalty"]
         r["crowd"]["level"] = crowd.worst_level(r["crowd"]["level"], press["level"])
+        if isinstance(res, dict) and res.get("_stale"):
+            age_min = int((res.get("_stale_age_sec") or 0) // 60)
+            r["crowd"]["note"] = (f"GFW hours last-good cache se ({age_min} min purane) — "
+                                  "burst-pause mein bhi fleet signal mila, honestly labelled")
         if press["penalty"] > 0:
             r["reasons"].append(
                 f"🚢 GFW AIS: {hours:.1f} fleet hrs nearby in 30 d "

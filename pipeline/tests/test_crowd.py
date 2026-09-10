@@ -13,8 +13,11 @@ from pipeline import voyage
 def _isolated_store(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCA_CROWD_STORE", str(tmp_path / "crowd.json"))
     crowd.reset()
+    from pipeline import ttlcache
+    ttlcache.clear()
     yield
     crowd.reset()
+    ttlcache.clear()
 
 
 NOW = 1_800_000_000.0
@@ -89,3 +92,46 @@ def test_voyage_spreads_across_calls(monkeypatch):
     assert a["crowd"]["community_recent"] == 1
     assert any("spreading" in s for s in a["reasons"])         # auditable
     assert second["spreading"] is True
+
+
+# ── B15 GFW burst-resilience ────────────────────────────────────────
+
+def _patch_common(monkeypatch):
+    monkeypatch.setattr(voyage, "_pfz_candidates",
+                        lambda la, lo, mk, notes: _fake_candidates())
+    monkeypatch.setattr(voyage, "_hotspot_candidates",
+                        lambda la, lo, mk, notes: [])
+    monkeypatch.setattr(voyage.fc, "get_point_forecast", lambda la, lo: {})
+    monkeypatch.setattr(voyage, "_point_state_stub",
+                        lambda pf: {"state": "good", "wave_m": 1.0, "why": None})
+
+
+def test_burst_pause_serves_last_good_no_http(monkeypatch):
+    from pipeline import gfw, ttlcache
+    _patch_common(monkeypatch)
+    ttlcache.remember_last_good(voyage._gfw_cell_key(15.5, 83.5),
+                                {"hours": 60.0, "vessel_ids": 4})
+    monkeypatch.setattr(gfw, "_rate_limit_remaining", lambda: 50.0)
+    monkeypatch.setattr(gfw, "get_fishing_effort",
+                        lambda *a, **k: pytest.fail("HTTP fired during burst-pause"))
+    out = voyage.recommend(15.0, 83.0, max_km=400.0)
+    a = next(r for r in out["recommendations"] if r["name"] == "A")
+    assert a["crowd"]["gfw_hours_30d"] == 60.0                   # stale serves
+    assert a["crowd"]["gfw_penalty"] == crowd.GFW_HIGH_PENALTY
+    assert "last-good" in (a["crowd"]["note"] or "")             # labelled
+    b = next(r for r in out["recommendations"] if r["name"] == "B")
+    assert b["crowd"]["gfw_hours_30d"] is None                   # honest unknown
+    assert any("burst-pause" in n for n in out["notes"])
+
+
+def test_fresh_success_remembered_for_cell(monkeypatch):
+    from pipeline import gfw, ttlcache
+    _patch_common(monkeypatch)
+    monkeypatch.setattr(gfw, "_rate_limit_remaining", lambda: 0.0)
+    monkeypatch.setattr(gfw, "get_fishing_effort",
+                        lambda *a, **k: {"hours": 4.0, "vessel_ids": 1})
+    out = voyage.recommend(15.0, 83.0, max_km=400.0)
+    a = next(r for r in out["recommendations"] if r["name"] == "A")
+    assert a["crowd"]["gfw_hours_30d"] == 4.0
+    got = ttlcache.get_last_good(voyage._gfw_cell_key(15.5, 83.5), 600)
+    assert got is not None and got["hours"] == 4.0               # remembered

@@ -108,7 +108,11 @@ def get_token() -> str | None:
 _RATE_LIMIT_UNTIL = 0.0
 _result_cache: dict[str, tuple[float, dict]] = {}
 _cache_lock = threading.Lock()
-_GFW_CACHE_TTL_SEC = 6 * 3600  # 6 h
+_GFW_CACHE_TTL_SEC = 24 * 3600  # 24 h (B15: the 30-day effort aggregate
+# barely moves inside one day, and the cache key carries the exact date
+# window — a new day always triggers ONE fresh fetch per point. Together
+# this slashes per-day GFW calls ~4×, which is what actually keeps the
+# free-tier BURST limiter calm.)
 
 # ── Persistent state (survives backend restarts) ─────────────────────
 # Root cause of the "429 keeps coming back even after our 120 s pause"
