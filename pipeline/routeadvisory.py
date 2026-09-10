@@ -82,17 +82,25 @@ def _sample_points(legs: list[list[float]],
     pts.append({"lat": la, "lon": lo, "sail_km": round(cum, 1), "vertex": True})
 
     if len(pts) > max_n:
-        verts = [p for p in pts if p["vertex"]]
-        mids = [p for p in pts if not p["vertex"]]
-        keep_mids = max_n - len(verts)
-        if keep_mids < 0:
-            keep_mids = 0
-        if mids and keep_mids:
-            step = max(1, int(len(mids) / keep_mids + 0.999))
-            mids = mids[::step][:keep_mids]
-        else:
-            mids = []
-        pts = sorted(verts + mids, key=lambda p: p["sail_km"])
+        # Even-sail distribution: vertices are sacred; the REMAINING
+        # budget is spent on samples closest to evenly spaced sail
+        # targets across the WHOLE course — old stride-thinning could
+        # leave a 275 NM blind spot between two evidence points (seen
+        # live on the 3124 km Sri Lanka reroute, 2026-09-10).
+        keep_idx = {i for i, p in enumerate(pts) if p["vertex"]}
+        budget = max(0, max_n - len(keep_idx))
+        picked: set[int] = set()
+        if budget:
+            total = pts[-1]["sail_km"]
+            avail = [i for i, p in enumerate(pts) if i not in keep_idx]
+            for k in range(budget):
+                target = total * (k + 1) / (budget + 1)
+                rem = [i for i in avail if i not in picked]
+                if not rem:
+                    break
+                picked.add(min(rem, key=lambda i: abs(pts[i]["sail_km"] - target)))
+            keep_idx |= picked
+        pts = sorted((pts[i] for i in keep_idx), key=lambda p: p["sail_km"])
     return pts
 
 

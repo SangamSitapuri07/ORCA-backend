@@ -34,10 +34,25 @@ MS_TO_KN = 1.943844
 
 
 def _http_json(url: str, params: dict[str, str], timeout: float = 12.0) -> dict:
+    """One GET with ONE honest retry on transient network failures (2 s
+    gap). Seen live on the user's Jio/ISP + laptop web-shield: rapid
+    parallel HTTPS bursts get hit by TLS-interception hiccups
+    (SSL: CERTIFICATE_VERIFY_FAILED) that succeed instantly on retry.
+    If the retry fails too, the real error propagates and the point is
+    honestly marked 'fetch failed' — we never paper over it."""
     full = f"{url}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(full, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8"))
+
+    def once() -> dict:
+        req = urllib.request.Request(full, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+
+    try:
+        return once()
+    except Exception:  # noqa: BLE001 — any transient net/ssl glitch
+        import time
+        time.sleep(2.0)
+        return once()
 
 
 def _fetch_now(lat: float, lon: float, days: int) -> dict[str, Any]:
