@@ -21,6 +21,8 @@ Endpoints:
   POST /api/v1/live/ping        heartbeat + position (response: sos_nearby)
   POST /api/v1/live/sos         beacon RED + POST .../sos/clear "theek hoon"
   POST /api/v1/live/stop        beacon OFF = instant full delete
+  POST .../live/rescue/answer   rescuer accept/decline (B19 dispatch)
+  POST .../live/rescue/complete rescuer marks rescue done → victim cleared
   GET  /api/v1/live/nearby      beacons within radius (distance+bearing)
   GET  /api/v1/live/sos         all ACTIVE SOS in the network
   GET  /api/v1/live/boat/{pid}  share-link: live position by public id
@@ -249,6 +251,7 @@ def root() -> dict[str, Any]:
             "POST /api/v1/chat",
             "POST /api/v1/feedback",
             "POST /api/v1/live/start|ping|sos|sos/clear|stop",
+            "POST /api/v1/live/rescue/answer|complete",
             "GET /api/v1/live/nearby|sos|boat/{pid}|stats",
             "WS /ws/chat",
         ],
@@ -715,6 +718,42 @@ def live_stop(payload: dict[str, Any]) -> dict[str, Any]:
     """Beacon OFF = turant poora delete (privacy promise). Body: {session}."""
     from pipeline import live
     return live.stop(_live_session(payload))
+
+
+@app.post("/api/v1/live/rescue/answer")
+def live_rescue_answer(payload: dict[str, Any]) -> dict[str, Any]:
+    """B19 dispatch ka jawab. Body: {session, case_id, accept: bool, reason?}.
+    accept → dono taraf live tracking; decline (+ wajah) → next boats ko
+    jaata rahega. Accepted response mein rescuer→victim bearing/doori aati hai."""
+    from pipeline import live
+    session = _live_session(payload)
+    case_id = payload.get("case_id")
+    if not isinstance(case_id, str) or len(case_id.strip()) < 4:
+        raise HTTPException(status_code=400, detail="'case_id' missing — rescue_request mein aaya tha")
+    accept = payload.get("accept")
+    if not isinstance(accept, bool):
+        raise HTTPException(status_code=400, detail="'accept' true/false chahiye")
+    reason = payload.get("reason")
+    res = live.rescue_answer(session, case_id.strip(), accept,
+                             reason=reason if isinstance(reason, str) else None)
+    if not res.get("ok"):
+        raise HTTPException(status_code=404, detail=res.get("error", "case nahi mila"))
+    return res
+
+
+@app.post("/api/v1/live/rescue/complete")
+def live_rescue_complete(payload: dict[str, Any]) -> dict[str, Any]:
+    """Rescuer: 'pahunch gaya / sab safe' → case RESOLVE + victim SOS auto-clear.
+    Body: {session, case_id}. Sirf ACCEPTED rescuer kar sakta hai."""
+    from pipeline import live
+    session = _live_session(payload)
+    case_id = payload.get("case_id")
+    if not isinstance(case_id, str) or len(case_id.strip()) < 4:
+        raise HTTPException(status_code=400, detail="'case_id' missing")
+    res = live.rescue_complete(session, case_id.strip())
+    if not res.get("ok"):
+        raise HTTPException(status_code=404, detail=res.get("error", "case nahi mila"))
+    return res
 
 
 @app.get("/api/v1/live/nearby")
