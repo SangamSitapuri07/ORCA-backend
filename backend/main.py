@@ -23,6 +23,7 @@ Endpoints:
   POST /api/v1/live/stop        beacon OFF = instant full delete
   POST .../live/rescue/answer   rescuer accept/decline (B19 dispatch)
   POST .../live/rescue/complete rescuer marks rescue done → victim cleared
+  POST .../live/rescue/msg      ORCA Radio case-channel message (B20)
   GET  /api/v1/live/nearby      beacons within radius (distance+bearing)
   GET  /api/v1/live/sos         all ACTIVE SOS in the network
   GET  /api/v1/live/boat/{pid}  share-link: live position by public id
@@ -251,7 +252,7 @@ def root() -> dict[str, Any]:
             "POST /api/v1/chat",
             "POST /api/v1/feedback",
             "POST /api/v1/live/start|ping|sos|sos/clear|stop",
-            "POST /api/v1/live/rescue/answer|complete",
+            "POST /api/v1/live/rescue/answer|complete|msg",
             "GET /api/v1/live/nearby|sos|boat/{pid}|stats",
             "WS /ws/chat",
         ],
@@ -667,9 +668,11 @@ def live_start(payload: dict[str, Any]) -> dict[str, Any]:
 
 @app.post("/api/v1/live/ping")
 def live_ping(payload: dict[str, Any]) -> dict[str, Any]:
-    """Heartbeat + position. Response mein sos_nearby — DEFAULT_RADIUS_NM
-    ke andar koi SOS hai toh path par hi alert mil jaata hai (alag
-    polling ki zaroorat nahi). Body: {session, lat, lon, speed_kn?, heading_deg?, label?}"""
+    """Heartbeat + position. Response hi alert channel hai: sos_nearby +
+    rescue_request (+ ORCA Radio messages) + my_sos dispatch status.
+    Body: {session, lat, lon, speed_kn?, heading_deg?, label?, watch?}
+    watch=true → LISTENER mode (B20): bina beacon ke bhi SOS alerts —
+    position ~11 km tak ROUND ho ke store hoti hai (exact trail nahi)."""
     from pipeline import live
     session = _live_session(payload)
     lat = _live_f(payload, "lat", -90.0, 90.0)
@@ -681,7 +684,8 @@ def live_ping(payload: dict[str, Any]) -> dict[str, Any]:
     label = payload.get("label")
     return live.ping(session, lat, lon, speed_kn=_opt("speed_kn"),
                      heading_deg=_opt("heading_deg"),
-                     label=label if isinstance(label, str) else None)
+                     label=label if isinstance(label, str) else None,
+                     watch=payload.get("watch") is True)
 
 
 @app.post("/api/v1/live/sos")
@@ -753,6 +757,26 @@ def live_rescue_complete(payload: dict[str, Any]) -> dict[str, Any]:
     res = live.rescue_complete(session, case_id.strip())
     if not res.get("ok"):
         raise HTTPException(status_code=404, detail=res.get("error", "case nahi mila"))
+    return res
+
+
+@app.post("/api/v1/live/rescue/msg")
+def live_rescue_msg(payload: dict[str, Any]) -> dict[str, Any]:
+    """📻 ORCA Radio — case channel pe message (B20). Body: {session,
+    case_id, text, preset?}. Sirf victim + accepted rescuer. Delivery
+    ping/watch responses ke andar hi hoti hai — alag polling nahi."""
+    from pipeline import live
+    session = _live_session(payload)
+    case_id = payload.get("case_id")
+    if not isinstance(case_id, str) or len(case_id.strip()) < 4:
+        raise HTTPException(status_code=400, detail="'case_id' missing")
+    text = payload.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise HTTPException(status_code=400, detail="'text' missing — message khaali nahi ho sakta")
+    res = live.rescue_msg(session, case_id.strip(), text=text.strip(),
+                          preset=payload.get("preset") is True)
+    if not res.get("ok"):
+        raise HTTPException(status_code=403, detail=res.get("error", "msg fail"))
     return res
 
 

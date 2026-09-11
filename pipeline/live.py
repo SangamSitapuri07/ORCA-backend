@@ -61,6 +61,9 @@ DISPATCH_TIERS_NM = (10.0, 25.0, 50.0)   # escalation radii (MRCC style)
 DISPATCH_MAX_BOATS = 5                    # ek tier mein max kitni requests
 ESCALATE_AFTER_SEC = 60.0                 # no-accept → next tier
 OFFER_TTL_SEC = 10 * 60                   # ek request kitni der tak khuli
+# ── B20 listen-watch + comms ──
+WATCH_CELL_DEG = 0.1                      # listener position ~11 km tak ROUND
+MAX_CASE_MSGS = 30                        # ORCA Radio: per-case message cap
 NM_PER_KM = 1 / 1.852
 EARTH_R_KM = 6371.0088
 
@@ -256,15 +259,18 @@ def _accepted_rescue_case(rescuer_session: str) -> dict[str, Any] | None:
     return None
 
 
-def _dispatch_locked(case: dict[str, Any], now: float) -> None:
+def _dispatch_locked(case: dict[str, Any], now: float, force: bool = False) -> None:
     """Current tier ke andar ke NEAREST boats ko rescue request do.
-    Declined/expired ko dobara nahi chedte — marzi unki."""
+    Declined/expired ko dobara nahi chedte — marzi unki.
+    LATE-JOINER FIX (B20): ye har ping pe bhi chalta hai — jo boat SOS ke
+    BAAD paas mein aayi/online hui, use bhi turant request mil jaaye.
+    force=False pe last_dispatch_ts tabhi badlte hain jab sach mein nayi
+    offer gayi — warna escalation timer artificially reset ho jaata."""
     victim = _boats.get(case["victim"])
     if not victim:
         return
     tier = DISPATCH_TIERS_NM[min(case.get("tier_idx", 0), len(DISPATCH_TIERS_NM) - 1)]
     offers = case.setdefault("offers", {})
-    # offers referencing dead boats saaf karo
     for s in list(offers):
         if s not in _boats:
             offers.pop(s, None)
@@ -279,11 +285,13 @@ def _dispatch_locked(case: dict[str, Any], now: float) -> None:
             candidates.append((d, s))
     candidates.sort()
     room = DISPATCH_MAX_BOATS - sum(1 for o in offers.values() if o.get("state") in ("pending", "seen", "accepted"))
+    added = 0
     for _, s in candidates[:max(0, room)]:
         if s not in offers:
             offers[s] = {"state": "pending", "ts": now, "answered_ts": None, "reason": None}
-        # already pending → wapas se pending (retry allowed) — ts refresh nahi
-    case["last_dispatch_ts"] = now
+            added += 1
+    if added or force:
+        case["last_dispatch_ts"] = now
 
 
 def _escalate_locked(now: float) -> None:
@@ -298,9 +306,9 @@ def _escalate_locked(now: float) -> None:
             continue
         if now - float(c.get("last_dispatch_ts", c.get("ts", 0))) >= ESCALATE_AFTER_SEC:
             c["tier_idx"] = int(c.get("tier_idx", 0)) + 1
-            # teir badhi — officers dobara expire hoke bhi eligible nahi;
-            # declined ko chhod ke naye boats dispatch
-            _dispatch_locked(c, now)
+            # tier badhi = khud ek change hai (force=True — chahe koi naya
+            # boat mile ya na mile, timer yahin se restart)
+            _dispatch_locked(c, now, force=True)
 
 
 def _expire_offers_locked(now: float) -> None:
@@ -310,6 +318,23 @@ def _expire_offers_locked(now: float) -> None:
         for o in (c.get("offers") or {}).values():
             if o.get("state") in ("pending", "seen") and now - float(o.get("ts", now)) > OFFER_TTL_SEC:
                 o["state"] = "expired"
+
+
+def _msgs_view(case: dict[str, Any], me_session: str, now: float,
+               limit: int = 20) -> list[dict[str, Any]]:
+    """ORCA Radio feed — case ke andar ka comms channel. Privacy: case ke
+    saath hi wipe hota hai; sirf victim + involved rescuers ko dikhta hai."""
+    my_pid = pub_id(me_session)
+    out = []
+    for m in (case.get("messages") or [])[-limit:]:
+        out.append({
+            "from": m.get("from"),
+            "mine": m.get("from") == my_pid,
+            "text": str(m.get("text", ""))[:140],
+            "preset": bool(m.get("preset")),
+            "age_sec": max(0, int(now - float(m.get("ts", now)))),
+        })
+    return out
 
 
 def _rescue_payload_locked(session: str, now: float) -> dict[str, Any] | None:
@@ -337,6 +362,7 @@ def _rescue_payload_locked(session: str, now: float) -> dict[str, Any] | None:
             "bearing_deg": brg,
             "offer_age_sec": max(0, int(now - float(off["ts"]))),
             "expires_in_sec": max(0, int(OFFER_TTL_SEC - (now - float(off["ts"])))),
+            "messages": _msgs_view(c, session, now),
         }
         if best is None or d < best["distance_nm"]:
             best = payload
@@ -387,6 +413,7 @@ def _victim_case_payload_locked(case: dict[str, Any], now: float) -> dict[str, A
         "declined": sum(1 for o in offers.values() if o.get("state") == "declined"),
         "expired": sum(1 for o in offers.values() if o.get("state") == "expired"),
         "accepted": accepted,
+        "messages": _msgs_view(case, case["victim"], now),
     }
 
 
@@ -405,7 +432,7 @@ def start(session: str, lat: float, lon: float, label: str | None = None,
         _boats[session] = {
             "lat": float(lat), "lon": float(lon), "ts": ts if ts is not None else now,
             "label": (str(label).strip()[:40] or None) if label else None,
-            "sos": False,
+            "sos": False, "mode": "beacon",
         }
         _evict_locked()
         _save_locked()
@@ -414,12 +441,18 @@ def start(session: str, lat: float, lon: float, label: str | None = None,
 
 def ping(session: str, lat: float, lon: float, speed_kn: float | None = None,
          heading_deg: float | None = None, label: str | None = None,
-         ts: float | None = None, now: float | None = None) -> dict[str, Any]:
+         watch: bool = False, ts: float | None = None, now: float | None = None) -> dict[str, Any]:
     """Heartbeat + position update. RESPONSE hi alert channel hai:
        • sos_nearby — legacy passive list (radar fallback)
-       • rescue_request — mujh pe aayi hui RESCUE REQUEST (B19)
-       • my_sos — mere SOS ka dispatch status (B19): kisko gayi, kisne
-         dekha, kaun aa raha hai (live dist/ETA har ping pe taaza)"""
+       • rescue_request — mujh pe aayi hui RESCUE REQUEST (+ ORCA Radio msgs)
+       • my_sos — mere SOS ka dispatch status: kisko gayi, kisne dekha,
+         kaun aa raha hai (+ comms feed)
+    WATCH MODE (B20): watch=True → LISTENER ban ke suno (bina beacon ke
+    bhi paas ka SOS popup mil jaaye) — position WATCH_CELL_DEG (~11 km)
+    tak ROUND ho ke store hoti hai: koi exact trail KABHI nahi. Rescue
+    accept karte hi exact mode apne aap ON ho jaata hai.
+    LATE-JOINER FIX (B20): har ping pe open cases ka re-dispatch bhi
+    chalta hai — SOS ke BAAD aayi/online hui boat ko bhi request mile."""
     now = time.time() if now is None else now
     with _lock:
         _load_locked()
@@ -427,9 +460,17 @@ def ping(session: str, lat: float, lon: float, speed_kn: float | None = None,
         created = False
         if session not in _boats:
             created = True
-            _boats[session] = {"sos": False, "label": None}
+            _boats[session] = {"sos": False, "label": None, "mode": "beacon"}
         b = _boats[session]
-        b["lat"], b["lon"] = float(lat), float(lon)
+        if watch and not b.get("sos"):
+            # listener: coarse position only (AIS-receiver philosophy —
+            # sunne ke liye exact broadcast ki zaroorat nahi)
+            b["lat"] = round(round(float(lat) / WATCH_CELL_DEG) * WATCH_CELL_DEG, 4)
+            b["lon"] = round(round(float(lon) / WATCH_CELL_DEG) * WATCH_CELL_DEG, 4)
+            b["mode"] = "watch"
+        else:
+            b["lat"], b["lon"] = float(lat), float(lon)
+            b["mode"] = "beacon" if not watch else b.get("mode", "beacon")
         b["ts"] = ts if ts is not None else now
         if speed_kn is not None:
             b["speed_kn"] = float(speed_kn)
@@ -440,6 +481,11 @@ def ping(session: str, lat: float, lon: float, speed_kn: float | None = None,
         _evict_locked()
         _expire_offers_locked(now)
         _escalate_locked(now)
+        # LATE-JOINER: koi bhi ping aaye toh open cases fresh candidates
+        # dhoondh le — timer ko touch nahi karte jab tak naya offer na jaye
+        for c in _cases.values():
+            if c.get("status") in ("open",):
+                _dispatch_locked(c, now)
         alerts = [
             _public(s, ob, now, viewer=(float(lat), float(lon)))
             for s, ob in _boats.items()
@@ -487,6 +533,11 @@ def sos_on(session: str, note: str | None = None, lat: float | None = None,
             _boats[session] = {"lat": float(lat), "lon": float(lon),
                                "ts": now, "label": None}
         b = _boats[session]
+        # SOS = emergency broadcast: EXACT position + beacon mode ON
+        # (watch-mode listener ka SOS bhi yahin se exact ho jaata hai —
+        # rescue ke liye exact zaroori hai; privacy consent = user ne
+        # khud SOS dabaya)
+        b["mode"] = "beacon"
         if lat is not None and lon is not None and _valid_coord(lat, lon):
             b["lat"], b["lon"] = float(lat), float(lon)
         first_time = not b.get("sos")
@@ -505,11 +556,12 @@ def sos_on(session: str, note: str | None = None, lat: float | None = None,
                 "resolved_ts": None,
                 "resolved_by": None,
                 "offers": {},
+                "messages": [],
             }
             _cases[case["case_id"]] = case
         # sos dobara dabaya → redispatch mat karo sirf status do (idempotent)
         if first_time or not case.get("offers"):
-            _dispatch_locked(case, now)
+            _dispatch_locked(case, now, force=True)
         _save_locked()
         pub = _public(session, b, now)
         victim_view = _victim_case_payload_locked(case, now)
@@ -558,6 +610,11 @@ def rescue_answer(session: str, case_id: str, accept: bool,
             off["reason"] = str(reason).strip()[:80] or None
         if accept:
             case["status"] = "assigned"
+            me = _boats.get(session)
+            if me is not None:
+                # madad accept = rescue tracking ke liye EXACT live mode ON
+                # (consent: user ne khud "MADAD KARUNGA" dabaya)
+                me["mode"] = "beacon"
             payload = _rescue_payload_locked(session, now)
         else:
             payload = None
@@ -566,6 +623,36 @@ def rescue_answer(session: str, case_id: str, accept: bool,
     if payload:
         out["rescue"] = payload
     return out
+
+
+def rescue_msg(session: str, case_id: str, text: str | None = None,
+               preset: bool = False, now: float | None = None) -> dict[str, Any]:
+    """ORCA Radio — case channel pe message. Sirf victim aur ACCEPTED
+    rescuer bol sakte hain (channel saaf rakho — zindagi-maut ka line hai).
+    Messages ping/watch responses mein hi deliver hote hain — alag
+    polling nahi. Case ke saath wipe (privacy)."""
+    now = time.time() if now is None else now
+    txt = (str(text or "").strip())[:140]
+    if not txt:
+        return {"ok": False, "error": "khaali message — kuch likho ya preset chuno"}
+    with _lock:
+        _load_locked()
+        _prune_locked(now)
+        case = _cases.get(str(case_id))
+        if not case or case.get("status") not in ("open", "assigned"):
+            return {"ok": False, "error": "case band/expire ho chuka — ab channel bhi band"}
+        is_victim = case.get("victim") == session
+        off = (case.get("offers") or {}).get(session)
+        is_accepted = bool(off and off.get("state") == "accepted")
+        if not (is_victim or is_accepted):
+            return {"ok": False, "error": "sirf victim aur accepted rescuer baat kar sakte hain"}
+        msgs = case.setdefault("messages", [])
+        msgs.append({"from": pub_id(session), "text": txt,
+                     "preset": bool(preset), "ts": now})
+        del msgs[:-MAX_CASE_MSGS]
+        _save_locked()
+    return {"ok": True, "sent": True, "from": pub_id(session),
+            "count": len(case.get("messages", []))}
 
 
 def rescue_complete(session: str, case_id: str, now: float | None = None) -> dict[str, Any]:
@@ -627,9 +714,13 @@ def nearby(lat: float, lon: float, radius_nm: float = DEFAULT_RADIUS_NM,
         _prune_locked(now)
         viewer = (float(lat), float(lon))
         out = []
+        watchers = 0
         for s, b in _boats.items():
             d = _haversine_nm(float(lat), float(lon), float(b["lat"]), float(b["lon"]))
             if d <= radius_nm:
+                if b.get("mode") == "watch":
+                    watchers += 1  # listeners radar pe NAHI — unki coarse
+                    continue       # pos kabhi expose nahi hoti (privacy)
                 out.append(_public(s, b, now, viewer=viewer))
         out.sort(key=lambda x: x["distance_nm"])
     return {
@@ -638,6 +729,7 @@ def nearby(lat: float, lon: float, radius_nm: float = DEFAULT_RADIUS_NM,
         "boats": out,
         "count": len(out),
         "sos_count": sum(1 for x in out if x["sos"]),
+        "watchers": watchers,
         "generated_at": int(now),
     }
 
@@ -675,9 +767,12 @@ def stats(now: float | None = None) -> dict[str, Any]:
         _prune_locked(now)
         ages = [now - float(b.get("ts", now)) for b in _boats.values()]
         open_cases = [c for c in _cases.values() if c.get("status") in ("open", "assigned")]
+        watchers = sum(1 for b in _boats.values() if b.get("mode") == "watch")
     return {
-        "active_boats": len(_boats),
+        "active_boats": len(_boats) - watchers,
+        "watchers": watchers,
         "sos_active": sum(1 for b in _boats.values() if b.get("sos")),
+
         "open_rescue_cases": len(open_cases),
         "rescues_enroute": sum(1 for c in open_cases
                                if any(o.get("state") == "accepted" for o in (c.get("offers") or {}).values())),
