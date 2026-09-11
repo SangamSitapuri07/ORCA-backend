@@ -17,6 +17,14 @@ Endpoints:
   POST /api/v1/alerts/simulate  honestly-labelled DEMO alert (disaster drill)
   POST /api/v1/chat             rule-based assistant, one-shot JSON
   POST /api/v1/feedback         store user feedback (JSONL on disk)
+  POST /api/v1/live/start       ORCA Live Beacon ON (anonymous AIS-style)
+  POST /api/v1/live/ping        heartbeat + position (response: sos_nearby)
+  POST /api/v1/live/sos         beacon RED + POST .../sos/clear "theek hoon"
+  POST /api/v1/live/stop        beacon OFF = instant full delete
+  GET  /api/v1/live/nearby      beacons within radius (distance+bearing)
+  GET  /api/v1/live/sos         all ACTIVE SOS in the network
+  GET  /api/v1/live/boat/{pid}  share-link: live position by public id
+  GET  /api/v1/live/stats       rescue-net status + privacy policy
   WS   /ws/chat                 live chat trace (routing → agent steps →
                                 tokens → final advisory) + alert.push
 
@@ -240,6 +248,8 @@ def root() -> dict[str, Any]:
             "POST /api/v1/alerts/simulate",
             "POST /api/v1/chat",
             "POST /api/v1/feedback",
+            "POST /api/v1/live/start|ping|sos|sos/clear|stop",
+            "GET /api/v1/live/nearby|sos|boat/{pid}|stats",
             "WS /ws/chat",
         ],
     }
@@ -612,6 +622,138 @@ def voyage_recommend(
         return cached(key, 1800, lambda: recommend(lat, lon, max_km))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"voyage failed: {type(e).__name__}: {e}")
+
+
+# ── B18: ORCA Live Beacon — "Samudri Rakshak Net" ────────────────────
+# AIS waali philosophy fisher ke phone pe: voyage ke dauraan chhota GPS
+# ping → anonymous live beacon. SOS → paas ke ORCA boats ko automatic
+# alert (ping ke response mein hi). Privacy by design: positions sirf
+# tab tak survive karti hain jab tak ping aata rahe (2 h silence →
+# auto-delete), koi identity nahi, raw session kabhi public nahi.
+
+
+def _live_f(payload: dict[str, Any], key: str, lo: float, hi: float) -> float:
+    v = payload.get(key)
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not (lo <= float(v) <= hi):
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{key}' missing/invalid — {lo}..{hi} ke beech number chahiye")
+    return float(v)
+
+
+def _live_session(payload: dict[str, Any]) -> str:
+    v = payload.get("session")
+    if not isinstance(v, str) or len(v.strip()) < 4:
+        raise HTTPException(
+            status_code=400,
+            detail="'session' missing — pehle POST /api/v1/live/start karo")
+    return v.strip()
+
+
+@app.post("/api/v1/live/start")
+def live_start(payload: dict[str, Any]) -> dict[str, Any]:
+    """Beacon ON — voyage shuru. Body: {lat, lon, label?, session?}.
+    session na diya toh server ek random id bana ke de deta hai."""
+    from pipeline import live
+    lat = _live_f(payload, "lat", -90.0, 90.0)
+    lon = _live_f(payload, "lon", -180.0, 180.0)
+    label = payload.get("label")
+    session = payload.get("session") if isinstance(payload.get("session"), str) else ""
+    return live.start(session.strip(), lat, lon, label=label if isinstance(label, str) else None)
+
+
+@app.post("/api/v1/live/ping")
+def live_ping(payload: dict[str, Any]) -> dict[str, Any]:
+    """Heartbeat + position. Response mein sos_nearby — DEFAULT_RADIUS_NM
+    ke andar koi SOS hai toh path par hi alert mil jaata hai (alag
+    polling ki zaroorat nahi). Body: {session, lat, lon, speed_kn?, heading_deg?, label?}"""
+    from pipeline import live
+    session = _live_session(payload)
+    lat = _live_f(payload, "lat", -90.0, 90.0)
+    lon = _live_f(payload, "lon", -180.0, 180.0)
+
+    def _opt(key: str) -> float | None:
+        v = payload.get(key)
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    label = payload.get("label")
+    return live.ping(session, lat, lon, speed_kn=_opt("speed_kn"),
+                     heading_deg=_opt("heading_deg"),
+                     label=label if isinstance(label, str) else None)
+
+
+@app.post("/api/v1/live/sos")
+def live_sos_on(payload: dict[str, Any]) -> dict[str, Any]:
+    """🚨 Beacon RED. Body: {session, note?, lat?, lon?}. Unknown session
+    bhi lat/lon ke saath turant register ho jaata hai — zindagi-maut ke
+    waqt 'pehle start karo' error kabhi nahi."""
+    from pipeline import live
+    session = _live_session(payload)
+
+    def _opt(key: str) -> float | None:
+        v = payload.get(key)
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    note = payload.get("note")
+    res = live.sos_on(session, note=note if isinstance(note, str) else None,
+                      lat=_opt("lat"), lon=_opt("lon"))
+    if not res.get("ok"):
+        raise HTTPException(status_code=404, detail=res.get("error", "unknown session"))
+    return res
+
+
+@app.post("/api/v1/live/sos/clear")
+def live_sos_off(payload: dict[str, Any]) -> dict[str, Any]:
+    """'Main theek hoon' — SOS band. Body: {session}."""
+    from pipeline import live
+    res = live.sos_off(_live_session(payload))
+    if not res.get("ok"):
+        raise HTTPException(status_code=404, detail=res.get("error", "unknown session"))
+    return res
+
+
+@app.post("/api/v1/live/stop")
+def live_stop(payload: dict[str, Any]) -> dict[str, Any]:
+    """Beacon OFF = turant poora delete (privacy promise). Body: {session}."""
+    from pipeline import live
+    return live.stop(_live_session(payload))
+
+
+@app.get("/api/v1/live/nearby")
+def live_nearby(
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+    radius_nm: float = Query(20.0, ge=0.5, le=100.0),
+) -> dict[str, Any]:
+    """Radius ke andar ke saare live beacons (distance + bearing) —
+    rescue radar view."""
+    from pipeline import live
+    return live.nearby(lat, lon, radius_nm)
+
+
+@app.get("/api/v1/live/sos")
+def live_sos_list() -> dict[str, Any]:
+    """Poore network ke ACTIVE SOS — command-center / demo view."""
+    from pipeline import live
+    return live.sos_list()
+
+
+@app.get("/api/v1/live/boat/{pid}")
+def live_boat(pid: str) -> dict[str, Any]:
+    """Share-link lookup — pub_id se live position (family/rescue)."""
+    from pipeline import live
+    res = live.by_pub_id(pid)
+    if res is None:
+        raise HTTPException(
+            status_code=404,
+            detail="boat nahi mili — beacon band ho gaya, expire ho gaya "
+                   "(2 h silence) ya pub_id galat hai. ORCA kabhi purani "
+                   "position fake nahi karta.")
+    return {"ok": True, "boat": res}
+
+
+@app.get("/api/v1/live/stats")
+def live_stats() -> dict[str, Any]:
+    from pipeline import live
+    return live.stats()
 
 
 @app.get("/api/v1/tiles/{z}/{x}/{y}.png")
