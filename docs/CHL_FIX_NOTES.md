@@ -13,17 +13,18 @@ For Chennai (13.5, 80.5) on 2026-08-15, in a 0.2° box:
 | Source | Box range | Box mean | Nearest cell to (13.5, 80.5) |
 |--------|-----------|----------|------------------------------|
 | NOAA VIIRS DINEOF (what ORCA used) | **0.22 to 5.14** | 0.93 ❌ | 0.28 |
-| ESA OC-CCI v6.0 (IPCC standard) | 0.16 to 0.85 | 0.50 | 0.49 ✓ |
-| NASA Aqua MODIS (standard) | similar to OC-CCI | — | — |
+| ESA OC-CCI v6.0 (Climate Change Initiative product) | 0.16 to 0.85 | 0.50 | 0.49 ✓ |
+| NASA Aqua MODIS (historical note only; not wired to ORCA) | no retained reproducible response | — | — |
 
-The **16× to 23× spread** inside a 0.2° box is real. It's because
-Chennai's coast has heavy chlorophyll (coastal bloom, river runoff)
-while the open ocean 50 km offshore is oligotrophic (clear blue water).
-A 0.2° box (≈ 20 km) straddles that boundary.
+The provider responses showed a **16× to 23× spread** inside the queried
+0.2° box. ORCA cannot determine the cause from chlorophyll values alone:
+coastal optical-retrieval effects, cloud/quality handling, different products,
+dates, and genuine spatial variability are all possible. It must not be called
+a bloom, runoff signal, or water-mass boundary without independent evidence.
 
-ORCA was reporting the **box mean (0.93)**, which doesn't represent
-ANY actual point on the map. It's a mathematical average of two
-physically incompatible water masses.
+ORCA was reporting the **box mean (0.93)** rather than the value nearest
+the selected coordinate. It blended a spatially heterogeneous patch and was
+therefore the wrong quantity for a point probe.
 
 ## Fix (commit 554beb7)
 
@@ -32,15 +33,16 @@ physically incompatible water masses.
    `box_mean` so the user can see the spatial variance.
 
 2. **`pipeline/occci_chl.py`** (NEW) — added **ESA OC-CCI v6.0** as
-   an INDEPENDENT cross-check source. IPCC standard, 1 km, no auth.
+   an INDEPENDENT cross-check source. ESA CCI product, 1 km, no auth.
 
 3. **`pipeline/orca_data.py`** — now fetches OC-CCI in parallel,
    stores `chlorophyll_occci` on the snapshot.
 
 4. **`pipeline/agents/satellite.py`** — compares NOAA vs OC-CCI.
-   - If they agree within 3×: `cross_check_ok` (good)
-   - If they disagree by >3×: `cross_check_disagree` (warn) — this
-     means coastal blooms or sensor issues, surface honestly
+   - If they agree within the internal 3× display band: `cross_check_ok`
+   - If they disagree by >3×: `cross_check_disagree` (warn)
+   - Neither state validates a product or identifies a bloom, cloud, coastal,
+     or sensor cause without independent quality evidence.
 
 5. **`web/components/MapView.tsx`** — **right-click anywhere on the
    map** to analyze a custom point, not just the 8 hardcoded markers.
@@ -49,27 +51,25 @@ physically incompatible water masses.
 6. **`tools/verify_chl_sources.py`** — updated to show nearest cell vs
    box mean, with correct ERDDAP axis order for each dataset.
 
-## Expected new behavior
+## Recorded regression example (not a current live expectation)
 
-After this fix, the Chennai offshore analysis should show:
+The historical Chennai response used during that fix contained:
 - chlorophyll: **0.31 mg/m³** (nearest cell, was 0.93)
 - chlorophyll_occci: **0.49 mg/m³**
-- cross_check: ✓ "agrees within 3×"
-- satellite agent: "low productivity" (was "productive zone")
+- cross-source ratio: within the internal 3× display band (not scientific validation)
+- satellite agent: sourced chlorophyll context only; no productivity/catch verdict
 
-The PFZ score will drop (0.31 is below the 0.5-1.5 "productive"
-band), so the verdict may change to "neutral" or "not_recommended"
-instead of "highly_recommended". **This is correct** — the old
-"highly_recommended" verdict was based on a misleading average.
+The old synthetic PFZ score and `highly_recommended`/`not_recommended`
+verdicts have since been removed. A generic chlorophyll value is environmental
+context, not an official INCOIS PFZ, catch estimate, or fishing recommendation.
 
 ## What I did NOT do (and why)
 
-- **Did not** add a "fake" Indian chlorophyll source. INCOIS's
-  chlorophyll OPeNDAP is genuinely broken (see CHL_FIX_NOTES). I
-  rewrote `pipeline/incois.py` to admit this honestly.
-- **Did not** fall back to ESA OC-CCI as the primary. NOAA is the
-  primary (most recent, 9 km DINEOF gap-filled); OC-CCI is the
-  cross-check.
+- **Did not** add a "fake" Indian chlorophyll source. The configured INCOIS
+  LAS OPeNDAP call failed in this environment; that does not establish that the
+  provider is globally broken. `pipeline/incois.py` reports the actual failure.
+- **Did not** silently relabel ESA OC-CCI as the primary. NOAA and OC-CCI
+  attempts retain separate product identity, dates, values, and failures.
 - **Did not** keep the old box-mean behavior as an option. It's
   misleading by design — averaging across a coast/offshore boundary
   is a category error.
@@ -83,6 +83,6 @@ git log --oneline -5   # should show 554beb7 "fix(chl)..."
 python tools/verify_chl_sources.py
 ```
 
-Then restart the backend (Ctrl+C, then re-run uvicorn) and click
-Chennai on the dashboard. The chlorophyll should now be ~0.31
-mg/m³ instead of 0.93.
+Then restart the backend (Ctrl+C, then re-run uvicorn) and click Chennai on
+the dashboard. Expect either a nearest-cell value with product/date provenance
+or an explicit provider failure—never a fixed historical value or box mean.

@@ -52,7 +52,7 @@ def test_zone_snapshot_offline():
     assert "data_sources_used" in snap
     assert len(snap["data_sources_used"]) == 0
     assert "fetched_at" in snap
-    assert snap["pfz_score"] is None
+    assert "pfz_score" not in snap
     print("✅ test_zone_snapshot_offline passed")
 
 
@@ -70,8 +70,8 @@ def test_zone_snapshot_partial():
     assert snap["wave_max"] == 2.86
     assert "Open-Meteo Marine (SST + waves)" in snap["data_sources_used"]
     assert len(snap["data_sources_failed"]) == 5
-    assert snap["pfz_score"] is not None and snap["pfz_score"] >= 0.5
-    print(f"✅ test_zone_snapshot_partial passed (pfz_score={snap['pfz_score']})")
+    assert "pfz_score" not in snap
+    print("✅ test_zone_snapshot_partial passed (no synthetic PFZ score)")
 
 
 def test_zone_snapshot_full():
@@ -97,8 +97,11 @@ def test_zone_snapshot_full():
     assert snap["vessel_count"] == 5
     assert snap["fleet_by_flag"]["IND"] == 3
     assert snap["fleet_by_gear"]["trawler"] == 3
-    assert snap["pfz_score"] is not None and snap["pfz_score"] >= 0.8
-    print(f"✅ test_zone_snapshot_full passed (pfz_score={snap['pfz_score']})")
+    assert snap["fishing_window_start"] == "2026-07-12"
+    assert snap["fishing_window_end"] == "2026-08-11"
+    assert snap["fishing_bbox_radius_deg"] == 0.5
+    assert "pfz_score" not in snap
+    print("✅ test_zone_snapshot_full passed (GFW window retained; no synthetic PFZ score)")
 
 
 def test_zone_snapshot_incois_fallback():
@@ -126,20 +129,6 @@ def test_grid_snapshot_offline():
     print(f"✅ test_grid_snapshot_offline passed (n_points={g['n_points']})")
 
 
-def test_pfz_score_optimal_zone():
-    """PFZ score peaks at chlorophyll ~1 mg/m^3 and SST 24-29°C."""
-    snap = {"chlorophyll": 1.0, "sst_mean": 27.0, "fishing_hours": 5.0}
-    score = orca_data._pfz_score(snap)
-    assert score is not None and score >= 0.9
-    print(f"✅ test_pfz_score_optimal_zone passed (score={score})")
-
-
-def test_pfz_score_no_data():
-    snap = {}
-    assert orca_data._pfz_score(snap) is None
-    print("✅ test_pfz_score_no_data passed")
-
-
 def test_safe_helper():
     """The _safe wrapper never raises, returns (result, error_msg)."""
     def boom():
@@ -157,10 +146,8 @@ if __name__ == "__main__":
     test_zone_snapshot_full()
     test_zone_snapshot_incois_fallback()
     test_grid_snapshot_offline()
-    test_pfz_score_optimal_zone()
-    test_pfz_score_no_data()
     test_safe_helper()
-    print("\n🎉 All 8 orca_data tests passed!")
+    print("\n🎉 orca_data tests passed!")
 
 
 def test_noaa_lag_analysis_from_parallel_job():
@@ -217,7 +204,7 @@ def test_warmers_fill_the_agent_cache_keys():
         assert "wx:19.00,72.80:2026-08-15" in stats, f"weather not warmed: {sorted(stats)}"
 
         # The agent's own call afterwards must be a cache HIT — no second
-        # archive walk inside the serial 10-agent run.
+        # archive walk inside the serial ten-specialist run.
         r = anomaly_mod.analyze({"lat": 19.0, "lon": 72.8, "date": "2026-08-15", "sst_mean": 29.4})
         assert got["archive"] == 1, f"archive walked {got['archive']} times (must be 1)"
         assert any(f["type"] == "sst_anomaly" for f in r["findings"]), r["findings"]

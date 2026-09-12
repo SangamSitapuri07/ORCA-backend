@@ -15,7 +15,6 @@ def make_snap(**overrides):
         "chlorophyll_source": "NOAA",
         "fishing_hours": 5.0, "vessel_count": 5,
         "fleet_by_flag": {"IND": 5}, "fleet_by_gear": {"trawler": 5},
-        "pfz_score": 0.5,
         "data_sources_used": ["Open-Meteo", "NOAA"],
         "data_sources_failed": [],
     }
@@ -94,38 +93,30 @@ def test_weather_storm_warning():
 
 # ── Agent 4: GIS (no network needed) ──
 
-def test_gis_in_indian_eez():
-    r = gis.analyze(make_snap(lat=19.0, lon=72.8))  # Mumbai
+def test_gis_does_not_guess_eez_or_legal_boundaries():
+    r = gis.analyze(make_snap(lat=19.0, lon=72.8))
     assert r["agent"] == "gis"
+    assert r["risk_level"] == "unknown"
     types = [f["type"] for f in r["findings"]]
-    assert "in_indian_eez" in types
-    print("✅ test_gis_in_indian_eez passed")
+    assert "authoritative_boundaries_unavailable" in types
+    assert "in_indian_eez" not in types and "outside_indian_eez" not in types
+    print("✅ test_gis_does_not_guess_eez_or_legal_boundaries passed")
 
 
-def test_gis_outside_eez():
-    r = gis.analyze(make_snap(lat=10.0, lon=60.0))  # Arabian Sea
-    assert r["risk_level"] in ("low", "moderate")
-    types = [f["type"] for f in r["findings"]]
-    assert "outside_indian_eez" in types
-    print("✅ test_gis_outside_eez passed")
+def test_gis_reports_real_globe_land_state():
+    r = gis.analyze(make_snap(lat=19.0, lon=72.8))
+    finding = next(f for f in r["findings"] if f["type"] == "globe_land_state")
+    assert finding["value"] is False
+    assert "GLOBE" in finding["source"]
+    print("✅ test_gis_reports_real_globe_land_state passed")
 
 
-def test_gis_nearest_ports():
-    r = gis.analyze(make_snap(lat=19.0, lon=72.8))  # Mumbai
-    types = [f["type"] for f in r["findings"]]
-    assert "nearest_ports" in types
-    # Should find Mumbai ports
-    port_finding = next(f for f in r["findings"] if f["type"] == "nearest_ports")
+def test_gis_nearest_ports_are_labelled_non_authoritative():
+    r = gis.analyze(make_snap(lat=19.0, lon=72.8))
+    port_finding = next(f for f in r["findings"] if f["type"] == "nearest_ports_reference")
     assert "Mumbai" in port_finding["msg"]
-    print("✅ test_gis_nearest_ports passed")
-
-
-def test_gis_mpa_overlap():
-    r = gis.analyze(make_snap(lat=9.25, lon=79.30))  # Gulf of Mannar MNP
-    types = [f["type"] for f in r["findings"]]
-    assert "in_marine_protected_area" in types
-    assert r["risk_level"] == "moderate"
-    print("✅ test_gis_mpa_overlap passed")
+    assert port_finding["provenance_pending"] is True
+    print("✅ test_gis_nearest_ports_are_labelled_non_authoritative passed")
 
 
 def test_gis_no_location():
@@ -196,16 +187,17 @@ def test_anomaly_marine_heatwave():
         # Find the SST anomaly finding
         sst_findings = [f for f in r["findings"] if f["type"] == "sst_anomaly"]
         assert sst_findings
-        assert "EXTREME" in sst_findings[0]["msg"]
+        assert "3°C internal deviation flag" in sst_findings[0]["msg"]
+        assert "not a heatwave diagnosis" in sst_findings[0]["msg"]
     finally:
         anomaly._fetch_baseline = original
     print("✅ test_anomaly_marine_heatwave passed")
 
 
-# ── Integration: all 9 agents in one pipeline ──
+# ── Integration: all specialized agents in one pipeline ──
 
-def test_all_9_agents_in_pipeline():
-    """Mock all network calls and verify the full pipeline runs 9 agents."""
+def test_all_specialized_agents_in_pipeline():
+    """Mock network calls and verify the full ten-stage specialist pipeline."""
     weather._fetch = lambda *a, **kw: {
         "daily": {
             "wind_speed_10m_max": [5.0],
@@ -223,12 +215,12 @@ def test_all_9_agents_in_pipeline():
     }
     snap = make_snap()
     results = run_all(snap)
-    assert len(results) == 9, f"Expected 9 agents, got {len(results)}"
+    assert len(results) == 10, f"Expected 10 specialized agents, got {len(results)}"
     names = [r["agent"] for r in results]
-    expected = {"ocean", "satellite", "weather", "gis", "fisheries",
+    expected = {"ocean", "satellite", "weather", "gis", "map_synoptic", "fisheries",
                 "marine_ecology", "marine_risk", "anomaly", "validation"}
     assert set(names) == expected, f"Missing/extra agents: {set(names) ^ expected}"
-    print(f"✅ test_all_9_agents_in_pipeline passed ({len(results)} agents)")
+    print(f"✅ test_all_10_specialized_agents_in_pipeline passed ({len(results)} agents)")
 
 
 if __name__ == "__main__":
@@ -236,15 +228,14 @@ if __name__ == "__main__":
     test_weather_api_error()
     test_weather_good_conditions()
     test_weather_storm_warning()
-    test_gis_in_indian_eez()
-    test_gis_outside_eez()
-    test_gis_nearest_ports()
-    test_gis_mpa_overlap()
+    test_gis_does_not_guess_eez_or_legal_boundaries()
+    test_gis_reports_real_globe_land_state()
+    test_gis_nearest_ports_are_labelled_non_authoritative()
     test_gis_no_location()
     test_anomaly_no_location()
     test_anomaly_api_failure()
     test_anomaly_no_baseline()
     test_anomaly_normal_range()
     test_anomaly_marine_heatwave()
-    test_all_9_agents_in_pipeline()
-    print("\n🎉 All 15 new agent tests passed!")
+    test_all_specialized_agents_in_pipeline()
+    print("\n🎉 New agent tests passed!")

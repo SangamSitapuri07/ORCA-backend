@@ -9,14 +9,16 @@ module answers with a sampled grid (~10x10) of REAL values:
   - waves/wind   : Open-Meteo Marine + Forecast, multi-point request
                    (the same models the advisory verdict uses)
 
-Both calls are cached 30 min per rounded centre. The hotspot ranking is
-transparent: "fish-attracting productivity" = chlorophyll percentile of
-the sampled grid — productively labelled as a proxy, never a fish census.
+Both calls are cached 30 min per rounded centre. The legacy `hotspots`
+field is only a ranking of the highest observed chlorophyll cells in the
+sampled patch. It is not a PFZ, HAB diagnosis, fish census, catch estimate, or
+recommendation.
 
-Land guard: NOAA's DINEOF grid sometimes reports chl ON LAND (coastal
-bleed/sediment pixels, inland lakes/lagoons). Those pixels are real
-numbers but NOT fishing spots, so every chl cell is checked against the
-GLOBE 1 km land mask (pipeline/landmask.py) before it can rank or draw.
+Land guard: NOAA's DINEOF grid can report chlorophyll on land (coastal
+bleed/sediment pixels, inland lakes/lagoons). Every cell is checked against the
+GLOBE 1 km land mask before it can rank or draw. If the mask itself is
+unavailable, the response reports that limitation rather than claiming the
+cell is verified sea.
 """
 from __future__ import annotations
 
@@ -39,7 +41,7 @@ FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 USER_AGENT = "ORCA/1.0 (SIH 2026; marine research)"
 
 # Grid footprint (degrees around the clicked point) and resolution.
-RADIUS_DEG = 1.2          # ±1.2° → the fishing-relevant waters around a point
+RADIUS_DEG = 1.2          # ±1.2° sampling patch around a point
 CHL_STEP_DEG = 0.075      # NOAA DINEOF 9 km native step
 GRID_TARGET_N = 9         # ~GRID_TARGET_N x GRID_TARGET_N points per variable
 
@@ -75,13 +77,10 @@ def _bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 # ── coastal-bloom honesty probe ───────────────────────────────────────
-# The map legend says ">5 mg/m3 = bloom". Near river mouths (Hooghly,
-# Subarnarekha, Narmada...) SUSPENDED SEDIMENT can fool band-ratio
-# chlorophyll into bloom-range readings — a live reviewer flagged our
-# 11.76 mg/m3 Hooghly hotspot exactly for this. We never hide the value
-# (it IS what NOAA measured), but a bloom-range cell sitting within a
-# short sail of the coast earns an explicit turbidity caveat.
-BLOOM_MG = 5.0            # matches the chl legend's bloom threshold
+# The UI has a >=5 mg/m3 high-value display band. It is not a harmful-algal-
+# bloom classifier. Near river mouths, suspended sediment can bias optical
+# chlorophyll retrievals, so a coastal high-value cell gets an explicit caveat.
+HIGH_CHL_DISPLAY_MG = 5.0  # visual band only; not a HAB diagnostic threshold
 COASTAL_CAVEAT_KM = 30.0  # "coastal" = land within this sail distance
 
 
@@ -225,6 +224,7 @@ def fetch_met_grid(lat: float, lon: float) -> dict[str, Any]:
         points.append({
             "lat": p[0],
             "lon": p[1],
+            "observed_at": mc.get("time") or wc.get("time"),
             # real GLOBE 1 km land check — True/False/None(unknown), so the
             # UI can honestly mark on-land cells (values are the nearest
             # sea cell's, which IS useful right at the coast)
@@ -249,13 +249,11 @@ def fetch_met_grid(lat: float, lon: float) -> dict[str, Any]:
 
 def _hotspots(chl_points: list[dict[str, Any]], lat: float, lon: float,
               top: int = 3) -> list[dict[str, Any]]:
-    """Highest-chlorophyll cells = fish-attracting productivity hotspots.
+    """Return the highest observed chlorophyll cells in the sampled patch.
 
-    Labelled honestly: this is a plankton→baitfish→fish chain proxy,
-    NOT an AIS/fishery catch count (that is GFW's role, shown separately).
-
-    Sea-only: even if an on-land pixel slips past fetch_chl_grid's mask
-    (e.g. a hand-built list), it can never rank as a "fishing hotspot".
+    ``hotspots`` is retained as an API compatibility name only. The values are
+    not PFZ/catch recommendations and do not diagnose harmful blooms.
+    On-land cells are excluded when the GLOBE mask is available.
     """
     sea = [p for p in chl_points if landmask.is_land(p["lat"], p["lon"]) is not True]
     ranked = sorted(sea, key=lambda p: -p["chl"])[:top]
@@ -263,12 +261,12 @@ def _hotspots(chl_points: list[dict[str, Any]], lat: float, lon: float,
     for p in ranked:
         d = _haversine_km(lat, lon, p["lat"], p["lon"])
         coast_km = _distance_to_land_km(p["lat"], p["lon"])
-        is_bloom = p["chl"] >= BLOOM_MG
+        is_high_chl = p["chl"] >= HIGH_CHL_DISPLAY_MG
         caveat = None
-        if is_bloom and coast_km is not None and coast_km <= COASTAL_CAVEAT_KM:
+        if is_high_chl and coast_km is not None and coast_km <= COASTAL_CAVEAT_KM:
             caveat = (
-                "coastal bloom: river-mouth turbidity (suspended sediment) can "
-                "inflate satellite chl here — cross-check INCOIS PFZ before steaming far"
+                "coastal high-chlorophyll pixel: suspended sediment can bias the "
+                "optical retrieval; this is not a harmful-bloom or PFZ classification"
             )
         out.append({
             "lat": p["lat"],
@@ -277,7 +275,8 @@ def _hotspots(chl_points: list[dict[str, Any]], lat: float, lon: float,
             "distance_km": round(d, 1),
             "distance_nm": round(d / 1.852, 1),
             "bearing": _compass(_bearing(lat, lon, p["lat"], p["lon"])),
-            "bloom": is_bloom,
+            # Legacy response key: true means only the high display band.
+            "bloom": is_high_chl,
             "coast_km": coast_km,
             "caveat": caveat,
         })
@@ -313,11 +312,10 @@ def _build(lat: float, lon: float) -> dict[str, Any]:
         "hotspots": _hotspots(chl.get("points", []), lat, lon) if chl.get("points") else [],
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "note": (
-            "Chlorophyll hotspots mark plankton-rich water that attracts "
-            "baitfish (productivity proxy — not a direct fish count). "
-            "On-land pixels (coastal bleed, lakes/lagoons like Chilika) "
-            "are excluded with the real GLOBE 1 km land mask, so a "
-            "hotspot can never sit on dry ground. "
-            "Waves/wind are sampled at the same grid cells."
+            "The legacy 'hotspots' list ranks only the highest observed "
+            "chlorophyll cells in this sampled patch; it is not a PFZ, harmful-"
+            "bloom diagnosis, fish count, catch estimate, or recommendation. "
+            "On-land pixels are excluded when the GLOBE 1 km mask is available. "
+            "Waves and wind are sampled at the same grid cells."
         ),
     }

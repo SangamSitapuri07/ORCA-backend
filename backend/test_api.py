@@ -51,7 +51,7 @@ def test_zones():
 def test_datasets():
     r = get("/api/v1/datasets")
     assert len(r["sources"]) >= 5
-    assert len(r["agents"]) == 10
+    assert len(r["agents"]) == 11
     implemented = sum(1 for a in r["agents"] if a["implemented"])
     print(f"✅ test_datasets passed ({len(r['sources'])} sources, {implemented}/{len(r['agents'])} agents implemented)")
 

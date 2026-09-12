@@ -23,6 +23,7 @@ pre-baked, and the same answers on a demo laptop with no internet.
 from __future__ import annotations
 
 import math
+from datetime import datetime, timezone
 
 from pipeline import landmask
 
@@ -101,12 +102,15 @@ def compute_sea_route(from_lat: float, from_lon: float,
         "bearing_deg": round(_bearing_deg(from_lat, from_lon, to_lat, to_lon), 1),
         "sample_step_km": SAMPLE_STEP_KM,
         "method": "rhumb-line sampling vs GLOBE 1 km land mask (local, real)",
+        "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "sources": [],
     }
     if not landmask.enabled():
         return {**base, "ok": None,
                 "reason": "land mask unavailable — course NOT verified",
                 "legs": [base["from"], base["to"]], "detour": False}
 
+    base["sources"] = ["NOAA GLOBE 1 km land mask (local raster)"]
     try:
         hit = _seg_land_hit(from_lat, from_lon, to_lat, to_lon)
     except Exception:  # noqa: BLE001

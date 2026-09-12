@@ -1,4 +1,4 @@
-"""ORCA FastAPI backend — exposes the unified data layer, 10 agents,
+"""ORCA FastAPI backend — exposes the unified data layer, eleven execution stages,
 the deterministic advisory engine and the chat trace over HTTP+WebSocket
 for the Next.js frontend.
 
@@ -44,8 +44,9 @@ import json
 import os
 import platform
 import sys
+import time
 import traceback
-from datetime import date as date_cls
+from datetime import date as date_cls, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -124,8 +125,9 @@ _load_dotenv(PROJECT_ROOT.parent / ".env")
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from pipeline import alerts as alerts_mod
 from pipeline import chat as chat_mod
@@ -168,56 +170,59 @@ from pipeline.reasoner import reason
 from pipeline.ttlcache import cached, cache_stats
 
 
+_STARTED_MONOTONIC = time.monotonic()
+
 app = FastAPI(
     title="ORCA — Marine Intelligence API",
     description="Marine EcOsystem Reasoning with Collaborative Agents · SIH 2026 PS 176",
-    version="0.2.0",
+    version="0.3.0",
 )
 
 
 @app.exception_handler(Exception)
 async def _unhandled_to_json(request, exc):  # noqa: ANN001, ANN201
-    """Safety net: ANY unhandled exception (incl. response-serialization
-    failures, which live outside the route's try/except) becomes a JSON
-    body carrying the full traceback instead of Starlette's bare
-    'Internal Server Error' text — the web UI surfaces `detail` verbatim,
-    so the failure shows its own autopsy. Born 2026-09-04: laptop showed
-    'API 500: Internal Server Error' with zero usable info."""
+    """Return JSON while keeping stack traces in ORCA Box logs by default."""
     from fastapi.responses import JSONResponse
     tb = traceback.format_exc()
     print(f"[ORCA] UNHANDLED {request.url.path}: {type(exc).__name__}: {exc}\n{tb}",
           file=sys.stderr)
-    return JSONResponse(
-        status_code=500,
-        content={"detail": f"unhandled {type(exc).__name__}: {exc}\n{tb[-2500:]}"},
-    )
+    detail = "Internal server error. Check ORCA Box logs for the request traceback."
+    if os.getenv("ORCA_DEBUG", "0") == "1":
+        detail = f"unhandled {type(exc).__name__}: {exc}\n{tb[-2500:]}"
+    return JSONResponse(status_code=500, content={"detail": detail})
 
-# CORS: the Next.js dev proxy proved flaky on Windows (browser→:3000 proxy
-# →:8000 connections RST while the DIRECT WebSocket to :8000 worked fine),
-# so the web UI now calls the backend directly on localhost. Allow any
-# localhost/127.0.0.1 origin (any port) plus the Arena e2b preview hosts.
-from fastapi.middleware.cors import CORSMiddleware
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^https://.*\.e2b\.app$",
-    allow_methods=["*"],
-    allow_headers=["*"],
+def _internal_failure(label: str, exc: Exception) -> HTTPException:
+    """Log endpoint failures locally without exposing internals in production."""
+    tb = traceback.format_exc()
+    print(f"[ORCA] {label}: {type(exc).__name__}: {exc}\n{tb}", file=sys.stderr)
+    detail = f"{label} failed. Check ORCA Box logs."
+    if os.getenv("ORCA_DEBUG", "0") == "1":
+        detail = f"{label} failed: {type(exc).__name__}: {exc}\n{tb[-2500:]}"
+    return HTTPException(status_code=500, detail=detail)
+
+# Browser origins are explicit and environment-driven. Native Flutter clients
+# do not use CORS. Production deployments should set ORCA_CORS_ORIGINS and/or
+# ORCA_CORS_ORIGIN_REGEX to their own HTTPS origin(s).
+_cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "ORCA_CORS_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000",
+    ).split(",")
+    if origin.strip()
+]
+_cors_regex = os.getenv(
+    "ORCA_CORS_ORIGIN_REGEX",
+    r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
 )
-
-# CORS for the Next.js dev server (and any other local frontend)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3001",
-        "*",  # Arena preview proxy; tighten in production
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins,
+    allow_origin_regex=_cors_regex or None,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Accept", "Authorization", "Content-Type", "Last-Event-ID"],
 )
 
 
@@ -235,26 +240,42 @@ def _validate_date(d: str | None) -> None:
 def root() -> dict[str, Any]:
     return {
         "service": "ORCA — Marine Intelligence API",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "sih_problem_statement": "SIH 26176 (PS 176)",
         "endpoints": [
             "/api/v1/health",
+            "/api/v1/ollama/health",
+            "/api/v1/agents",
+            "/api/v1/datasets",
+            "/api/v1/zones",
             "/api/v1/zone",
             "/api/v1/grid",
             "/api/v1/reason",
-            "/api/v1/datasets",
-            "/api/v1/zones",
-            "/api/v1/agents",
             "/api/v1/advisory",
+            "/api/v1/field",
+            "/api/v1/route-check",
+            "/api/v1/route-advisory",
+            "/api/v1/voyage",
             "/api/v1/layers",
             "/api/v1/alerts",
-            "POST /api/v1/alerts/simulate",
-            "POST /api/v1/chat",
-            "POST /api/v1/feedback",
-            "POST /api/v1/live/start|ping|sos|sos/clear|stop",
-            "POST /api/v1/live/rescue/answer|complete|msg",
-            "GET /api/v1/live/nearby|sos|boat/{pid}|stats",
-            "WS /ws/chat",
+            "/api/v1/alerts/simulate",
+            "/api/v1/chat",
+            "/api/v1/feedback",
+            "/api/v1/tiles/{z}/{x}/{y}.png",
+            "/api/v1/seamarks/{z}/{x}/{y}.png",
+            "/api/v1/live/start",
+            "/api/v1/live/ping",
+            "/api/v1/live/sos",
+            "/api/v1/live/sos/clear",
+            "/api/v1/live/stop",
+            "/api/v1/live/rescue/answer",
+            "/api/v1/live/rescue/complete",
+            "/api/v1/live/rescue/msg",
+            "/api/v1/live/nearby",
+            "/api/v1/live/boat/{pid}",
+            "/api/v1/live/stats",
+            "/api/live/stream",
+            "/ws/chat",
         ],
     }
 
@@ -286,139 +307,221 @@ _GIT_COMMIT = _git_commit()
 
 @app.get("/api/v1/health")
 def health() -> dict[str, Any]:
-    gfw_token_set = bool(os.environ.get("GFW_API_TOKEN"))
+    """Configuration/runtime health without pretending to probe every provider."""
+    from pipeline import landmask
+    from pipeline.ollama_client import ollama
+
+    gfw_token_set = bool(os.environ.get("GFW_API_TOKEN") or os.environ.get("GFW_TOKEN"))
     mosdac_set = bool(os.environ.get("MOSDAC_USERNAME") and os.environ.get("MOSDAC_PASSWORD"))
+    cache = cache_stats()
+    source_health = {
+        "open_meteo_marine": {"name": "Open-Meteo Marine", "agency": "Open-Meteo", "status": "not_probed", "latency_ms": None, "note": "Live fetch-on-demand; not probed by health."},
+        "open_meteo_forecast": {"name": "Open-Meteo Forecast", "agency": "Open-Meteo", "status": "not_probed", "latency_ms": None, "note": "Live fetch-on-demand; not probed by health."},
+        "open_meteo_daily": {"name": "Open-Meteo Daily", "agency": "Open-Meteo", "status": "not_probed", "latency_ms": None, "note": "Live fetch-on-demand; not probed by health."},
+        "open_meteo_archive": {"name": "Open-Meteo Archive", "agency": "Open-Meteo", "status": "not_probed", "latency_ms": None, "note": "Three-prior-year comparison sample fetched on demand; not climatology and not probed by health."},
+        "noaa_coastwatch": {"name": "NOAA CoastWatch ERDDAP", "agency": "NOAA NESDIS", "status": "not_probed", "latency_ms": None, "note": "Live fetch-on-demand with explicit failure reporting; not probed by health."},
+        "esa_oc_cci": {"name": "ESA OC-CCI", "agency": "European Space Agency", "status": "not_probed", "latency_ms": None, "note": "Optional cloud-masked cross-check; not probed by health."},
+        "isro_mosdac": {"name": "ISRO MOSDAC OCM-3", "agency": "ISRO/SAC", "status": "configured_not_probed" if mosdac_set else "disabled", "latency_ms": None, "note": "Credentials configured." if mosdac_set else "Set MOSDAC_USERNAME and MOSDAC_PASSWORD."},
+        "incois_erddap": {"name": "INCOIS ERDDAP", "agency": "MoES/INCOIS", "status": "not_integrated", "latency_ms": None, "note": "Catalogued endpoint, but the current adapter found no chlorophyll dataset and does not query it."},
+        "incois_las": {"name": "INCOIS LAS", "agency": "MoES/INCOIS", "status": "not_probed", "latency_ms": None, "note": "Best-effort backup; not probed by health. The 2026-09-12 audit returned a NetCDF I/O failure in this runtime."},
+        "incois_pfz": {"name": "INCOIS PFZ GeoServer", "agency": "MoES/INCOIS", "status": "not_probed", "latency_ms": None, "note": "Official WFS lines fetched on demand; not probed by health."},
+        "gfw_ais": {"name": "Global Fishing Watch", "agency": "Global Fishing Watch", "status": "configured_not_probed" if gfw_token_set else "disabled", "latency_ms": None, "note": "Token configured." if gfw_token_set else "Set GFW_API_TOKEN to enable AIS effort/fleet data."},
+        "jtwc_cyclone": {"name": "JTWC", "agency": "US Navy", "status": "not_probed", "latency_ms": None, "note": "Cyclone bulletins fetched on demand; not probed by health."},
+        "marine_regions_eez": {"name": "MarineRegions WFS", "agency": "VLIZ", "status": "not_probed", "latency_ms": None, "note": "Optional EEZ display overlay only; not legal/safety evidence and not probed by health."},
+        "osm_tiles": {"name": "OpenStreetMap tiles", "agency": "OpenStreetMap", "status": "not_probed", "latency_ms": None, "note": "First-party cached display proxy; not probed by health."},
+        "openseamap_seamarks": {"name": "OpenSeaMap seamarks", "agency": "OpenSeaMap", "status": "not_probed", "latency_ms": None, "note": "Optional first-party cached display proxy; not an official nautical chart and not probed by health."},
+        "globe_landmask": {"name": "GLOBE 1 km Land Mask", "agency": "NOAA", "status": "available" if landmask.enabled() else "unavailable", "latency_ms": None, "note": "Bundled local raster." if landmask.enabled() else "Install global-land-mask to enable route verification."},
+        "nominatim_osm": {"name": "Nominatim", "agency": "OpenStreetMap", "status": "not_integrated", "latency_ms": None, "note": "Listed in the client source catalog only; no search datasource is wired."},
+    }
     return {
         "status": "ok",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "build_commit": _GIT_COMMIT,
+        "uptime_seconds": int(time.monotonic() - _STARTED_MONOTONIC),
         "gfw_token_configured": gfw_token_set,
         "credentials": {
             "gfw_token_configured": gfw_token_set,
             "mosdac_configured": mosdac_set,
         },
+        # Legacy summary retained for the existing web source chips.
         "data_sources": {
-            "openmeteo": "live (no key)",
-            "noaa_erddap": "live (no key)",
-            "esa_occci": "live (no key)",
-            "gfw": "live" if gfw_token_set else "needs GFW_API_TOKEN env var or .env file",
-            "incois_las": "server unreliable — fallback only",
-            "incois_pfz_wfs": "live — official daily PFZ advisory lines (no key)",
-            "jtwc": "live — active tropical cyclone warnings (no key)",
-            "mosdac": "live" if mosdac_set else "needs MOSDAC_USERNAME + MOSDAC_PASSWORD",
+            "openmeteo": "wired (live fetch-on-demand; not probed)",
+            "noaa_erddap": "wired (live fetch-on-demand; not probed)",
+            "esa_occci": "wired optional cross-check (not probed)",
+            "gfw": "configured" if gfw_token_set else "disabled — needs GFW_API_TOKEN",
+            "incois_las": "wired backup (live fetch-on-demand; not probed)",
+            "incois_pfz_wfs": "wired (official WFS; not probed)",
+            "jtwc": "wired supplemental guidance (live fetch-on-demand; not probed)",
+            "mosdac": "configured" if mosdac_set else "disabled — needs MOSDAC credentials",
         },
-        "cache": cache_stats(),
+        "source_health": source_health,
+        "components": {
+            "ollama": ollama.health(probe=False),
+            "sse": {"status": "available", "persistence": "in-memory active-alert replay"},
+            "demo_alerts": {"status": "enabled" if os.environ.get("ORCA_DEMO_MODE", "0") == "1" else "disabled"},
+            "postgres_postgis": {"status": "unavailable", "reason": "authoritative team implementation not supplied"},
+            "rag": {"status": "unavailable", "reason": "authoritative team implementation not supplied"},
+            "supabase": {"status": "unavailable", "reason": "no server-side route implementation supplied; core safety is independent"},
+        },
+        "cache": cache,
+        "cache_summary": {"in_memory_keys": len(cache), "hit_rate_pct": None},
     }
+
+
+@app.get("/api/v1/ollama/health")
+def ollama_health() -> dict[str, Any]:
+    """Actively probe the configured local Ollama server and model."""
+    from pipeline.ollama_client import ollama
+    return ollama.health(probe=True)
 
 
 @app.get("/api/v1/agents")
 def agents_registry() -> dict[str, Any]:
-    """The 10-agent registry — roles exactly as designed in the ORCA spec."""
+    """The eleven real execution stages exposed by ``/api/v1/reason``."""
+    agents = [
+        {"id": "data_validation", "name": "Data Validation ✅", "class": "DETERMINISTIC", "role": "Physical-range, missing-data and provenance checks", "sources": ["ZoneSnapshot metadata"]},
+        {"id": "gis_spatial", "name": "GIS & Spatial 🗺️", "class": "DETERMINISTIC", "role": "GLOBE land/sea context; legal boundaries explicitly unavailable", "sources": ["GLOBE 1 km land mask", "ORCA static port references (citations pending)"]},
+        {"id": "ocean_analysis", "name": "Ocean Analysis 🌊", "class": "LLM + DETERMINISTIC", "role": "Deterministic SST/wave analysis with optional Ollama explanation", "sources": ["Open-Meteo Marine"]},
+        {"id": "satellite_analysis", "name": "Satellite Analysis 🛰️", "class": "LLM + DETERMINISTIC", "role": "Deterministic chlorophyll cross-check with optional Ollama explanation", "sources": ["NOAA ERDDAP", "ESA OC-CCI", "MOSDAC OCM-3"]},
+        {"id": "weather_hazard", "name": "Weather & Hazard 🌦️", "class": "LLM + DETERMINISTIC", "role": "Configured weather threshold checks with optional Ollama explanation", "sources": ["Open-Meteo Forecast"]},
+        {"id": "map_synoptic", "name": "Map Synoptic 🗺️", "class": "DETERMINISTIC", "role": "Available overlays with per-layer provenance and failure metadata", "sources": ["ORCA GeoJSON layer service"]},
+        {"id": "marine_ecology", "name": "Marine Ecology 🐟", "class": "LLM + DETERMINISTIC", "role": "Provisional co-observation context; no ecological or catch verdict", "sources": ["ZoneSnapshot observations"]},
+        {"id": "fisheries_pfz", "name": "Fisheries Context 🎣", "class": "LLM + DETERMINISTIC", "role": "Reports environmental and GFW context without inventing a PFZ verdict", "sources": ["GFW AIS", "ZoneSnapshot observations"]},
+        {"id": "anomaly_detection", "name": "Anomaly Detection 🔍", "class": "DETERMINISTIC", "role": "Deviation against fetched historical baselines", "sources": ["Open-Meteo Archive"]},
+        {"id": "marine_risk", "name": "Marine Risk 🚨", "class": "DETERMINISTIC", "role": "Authoritative worst-case risk fold", "sources": ["Structured agent findings"]},
+        {"id": "orchestrator", "name": "ORCA Orchestrator 🧠", "class": "LLM + DETERMINISTIC", "role": "Deterministic synthesis with optional bounded Ollama explanation", "sources": ["All agent findings"]},
+    ]
     return {
-        "agents": [
-            {"id": "ocean", "name": "Ocean Analysis 🌊",
-             "role": "SST, waves, currents, swell analysis and anomaly flags",
-             "sources": ["Open-Meteo Marine API"], "implemented": True},
-            {"id": "satellite", "name": "Satellite Analysis 🛰️",
-             "role": "Chlorophyll-a, ocean colour, productivity classification",
-             "sources": ["NOAA ERDDAP VIIRS DINEOF", "ESA OC-CCI", "INCOIS LAS (backup)", "MOSDAC OCM-3 (credentials)"],
-             "implemented": True},
-            {"id": "weather", "name": "Weather & Hazard 🌦️",
-             "role": "Wind, gusts, rainfall, storm risk (WMO/IMD thresholds)",
-             "sources": ["Open-Meteo Forecast (ECMWF/MeteoFrance)"], "implemented": True},
-            {"id": "gis", "name": "GIS & Spatial 🗺️",
-             "role": "Coastline, zones, boundaries and spatial context",
-             "sources": ["GADM/Natural Earth bundles", "MarineRegions EEZ (layers)"], "implemented": True},
-            {"id": "marine_ecology", "name": "Marine Ecology 🐟",
-             "role": "Cross-synthesis: upwelling, bloom risk, productivity profile",
-             "sources": ["synthesizes ocean + satellite + weather results"], "implemented": True},
-            {"id": "fisheries", "name": "Fisheries / PFZ 🎣",
-             "role": "PFZ verdict from chlorophyll + SST + fleet signals",
-             "sources": ["ZoneSnapshot", "GFW AIS (optional)", "INCOIS PFZ WFS (official advisory)"],
-             "implemented": True},
-            {"id": "marine_risk", "name": "Marine Risk 🚨",
-             "role": "Low / Moderate / High / Critical synthesized risk",
-             "sources": ["synthesizes ocean + weather + hazard results"], "implemented": True},
-            {"id": "anomaly", "name": "Anomaly Detection 🔍",
-             "role": "Deviation vs historical baseline (SST/chl anomalies)",
-             "sources": ["ZoneSnapshot statistics"], "implemented": True},
-            {"id": "validation", "name": "Data Validation ✅",
-             "role": "Missing / inconsistent / abnormal data QC on every snapshot",
-             "sources": ["ZoneSnapshot metadata"], "implemented": True},
-            {"id": "orca_reasoning", "name": "ORCA Reasoning & Orchestration 🧠",
-             "role": "Coordinates all agents, resolves conflicts, final explainable insight",
-             "sources": ["all agents"], "implemented": True},
-        ],
-        "count": 10,
+        "agents": [{**agent, "implemented": True, "rag_invoked": False} for agent in agents],
+        "count": len(agents),
+        "safety_authority": "deterministic marine_risk and advisory engines",
+        "rag_status": "unavailable — authoritative implementation not supplied",
     }
 
 
 @app.get("/api/v1/datasets")
 def datasets() -> dict[str, Any]:
-    """List all data sources + the 10 agents with metadata."""
+    """Catalog every external/local source named by this checkout.
+
+    ``integration_status`` describes code/configuration, not current provider
+    liveness. Use the scientific endpoints for explicit per-request failures.
+    """
     return {
-        "agents": [
-            {"id": "ocean", "name": "Ocean Analysis 🌊", "implemented": True},
-            {"id": "satellite", "name": "Satellite Analysis 🛰️", "implemented": True},
-            {"id": "weather", "name": "Weather & Hazard 🌦️", "implemented": True},
-            {"id": "gis", "name": "GIS & Spatial 🗺️", "implemented": True},
-            {"id": "marine_ecology", "name": "Marine Ecology 🐟", "implemented": True},
-            {"id": "fisheries", "name": "Fisheries / PFZ 🎣", "implemented": True},
-            {"id": "marine_risk", "name": "Marine Risk 🚨", "implemented": True},
-            {"id": "anomaly", "name": "Anomaly Detection 🔍", "implemented": True},
-            {"id": "validation", "name": "Data Validation ✅", "implemented": True},
-            {"id": "orca_reasoning", "name": "ORCA Reasoning 🧠 (in reasoner.py)", "implemented": True},
-        ],
+        "agents": agents_registry()["agents"],
         "sources": [
             {
-                "id": "noaa_erddap_dineof",
-                "name": "NOAA ERDDAP VIIRS DINEOF (chlorophyll)",
+                "id": "noaa_erddap_dineof", "name": "NOAA CoastWatch ERDDAP",
                 "kind": "satellite", "cost": "free", "auth": "none",
-                "coverage": "global, 0.025° daily, 3-day delay",
-                "url": "https://coastwatch.noaa.gov/erddap/griddap/noaacwNPPN20VIIRSDINEOFDaily",
+                "coverage": "configured VIIRS chlorophyll datasets",
+                "url": "https://coastwatch.noaa.gov/erddap/",
+                "integration_status": "wired_not_probed",
             },
             {
-                "id": "openmeteo_marine",
-                "name": "Open-Meteo Marine (SST + waves)",
+                "id": "esa_oc_cci", "name": "ESA OC-CCI v6 via NOAA ERDDAP",
+                "kind": "satellite", "cost": "free", "auth": "none",
+                "coverage": "optional chlorophyll source comparison",
+                "url": "https://comet.nefsc.noaa.gov/erddap/griddap/occci_v6_daily_1km",
+                "integration_status": "wired_not_probed",
+            },
+            {
+                "id": "openmeteo_marine", "name": "Open-Meteo Marine",
                 "kind": "weather_model", "cost": "free", "auth": "none",
-                "coverage": "global, 0.08° daily, MeteoFrance model",
+                "coverage": "marine forecast variables used by ORCA",
                 "url": "https://marine-api.open-meteo.com/v1/marine",
+                "integration_status": "wired_not_probed",
             },
             {
-                "id": "gfw_ais",
-                "name": "Global Fishing Watch (AIS)",
-                "kind": "vessel_tracking", "cost": "free with token", "auth": "GFW_API_TOKEN env var",
-                "coverage": "global, 0.01° daily, 2012-present",
-                "url": "https://gateway.api.globalfishingwatch.org/v3/4wings/report",
+                "id": "openmeteo_forecast", "name": "Open-Meteo Forecast and Daily",
+                "kind": "weather_model", "cost": "free", "auth": "none",
+                "coverage": "wind, gust, rain, weather-code and daily context",
+                "url": "https://api.open-meteo.com/v1/forecast",
+                "integration_status": "wired_not_probed",
             },
             {
-                "id": "incois_las",
-                "name": "INCOIS LAS (chlorophyll backup)",
-                "kind": "satellite", "cost": "free", "auth": "none",
-                "coverage": "Indian Ocean, OCM-2",
-                "url": "http://las.incois.gov.in/thredds/",
+                "id": "openmeteo_archive", "name": "Open-Meteo Archive",
+                "kind": "historical_context", "cost": "free", "auth": "none",
+                "coverage": "up to three prior-year date-window SST samples",
+                "url": "https://archive-api.open-meteo.com/v1/archive",
+                "integration_status": "wired_not_probed",
             },
             {
-                "id": "incois_pfz_wfs",
-                "name": "INCOIS PFZ advisory lines (official, daily) 🎣",
-                "kind": "advisory", "cost": "free", "auth": "none",
-                "coverage": "Indian coast, daily MultiLineString advisories",
-                "url": "https://incois.gov.in/geoserver/PFZ_Automation/ows",
-            },
-            {
-                "id": "jtwc_rss",
-                "name": "JTWC tropical cyclone warnings",
-                "kind": "advisory", "cost": "free", "auth": "none",
-                "coverage": "North Indian + NW Pacific + SH, ~6-hourly",
-                "url": "https://www.metoc.navy.mil/jtwc/rss/jtwc.rss",
-            },
-            {
-                "id": "mosdac_ocm3",
-                "name": "MOSDAC OCM-3 L4 (🇮🇳 Indian daily chlorophyll)",
+                "id": "isro_mosdac", "name": "MOSDAC EOS-06 OCM-3 L2C LAC",
                 "kind": "satellite", "cost": "free with credentials",
                 "auth": "MOSDAC_USERNAME / MOSDAC_PASSWORD env vars",
-                "coverage": "Indian Ocean, 1 km daily",
+                "coverage": "optional OCM-3 granule source comparison",
                 "url": "https://www.mosdac.gov.in",
+                "integration_status": "wired_requires_credentials",
+            },
+            {
+                "id": "incois_erddap", "name": "INCOIS ERDDAP",
+                "kind": "catalog_only", "cost": "free", "auth": "none",
+                "coverage": "no selected chlorophyll dataset in current code",
+                "url": "https://erddap.incois.gov.in/erddap/",
+                "integration_status": "not_integrated",
+            },
+            {
+                "id": "incois_las", "name": "INCOIS LAS chlorophyll backup",
+                "kind": "satellite", "cost": "free", "auth": "none",
+                "coverage": "best-effort Indian Ocean backup",
+                "url": "http://las.incois.gov.in/thredds/",
+                "integration_status": "wired_not_probed",
+            },
+            {
+                "id": "incois_pfz_wfs", "name": "INCOIS official PFZ WFS",
+                "kind": "advisory", "cost": "free", "auth": "none",
+                "coverage": "official PFZ line geometry",
+                "url": "https://incois.gov.in/geoserver/PFZ_Automation/ows",
+                "integration_status": "wired_not_probed",
+            },
+            {
+                "id": "gfw_ais", "name": "Global Fishing Watch v3",
+                "kind": "vessel_context", "cost": "free with token",
+                "auth": "GFW_API_TOKEN / GFW_TOKEN env var",
+                "coverage": "optional effort and vessel/fleet context",
+                "url": "https://gateway.api.globalfishingwatch.org/v3/4wings/report",
+                "integration_status": "wired_requires_credentials",
+            },
+            {
+                "id": "jtwc_rss", "name": "JTWC tropical cyclone warnings",
+                "kind": "supplemental_advisory", "cost": "free", "auth": "none",
+                "coverage": "supplemental regional cyclone guidance; not IMD",
+                "url": "https://www.metoc.navy.mil/jtwc/rss/jtwc.rss",
+                "integration_status": "wired_not_probed",
+            },
+            {
+                "id": "marine_regions_eez", "name": "MarineRegions WFS",
+                "kind": "display_layer", "cost": "free", "auth": "none",
+                "coverage": "optional EEZ display only; not legal evidence",
+                "url": "https://geo.vliz.be/geoserver/MarineRegions/ows",
+                "integration_status": "wired_not_probed",
+            },
+            {
+                "id": "globe_landmask", "name": "GLOBE 1 km land mask",
+                "kind": "bundled_local_raster", "cost": "bundled dependency", "auth": "none",
+                "coverage": "local land/water route checks",
+                "url": "https://www.ngdc.noaa.gov/mgg/topo/gltiles.html",
+                "integration_status": "local_component",
+            },
+            {
+                "id": "osm_tiles", "name": "OpenStreetMap tiles",
+                "kind": "display_layer", "cost": "free under usage policy", "auth": "none",
+                "coverage": "first-party cached base-map proxy",
+                "url": "https://tile.openstreetmap.org/",
+                "integration_status": "wired_not_probed",
+            },
+            {
+                "id": "openseamap_seamarks", "name": "OpenSeaMap seamarks",
+                "kind": "display_layer", "cost": "free", "auth": "none",
+                "coverage": "optional seamark proxy; not an official nautical chart",
+                "url": "https://tiles.openseamap.org/seamark/",
+                "integration_status": "wired_not_probed",
+            },
+            {
+                "id": "nominatim_osm", "name": "Nominatim search",
+                "kind": "catalog_only", "cost": "free under usage policy", "auth": "none",
+                "coverage": "no production search datasource in current code",
+                "url": "https://nominatim.openstreetmap.org/",
+                "integration_status": "not_integrated",
             },
         ],
     }
@@ -446,7 +549,7 @@ def get_zone(
     try:
         return zone_snapshot(lat, lon, date, radius_deg=radius_deg, include_gfw=include_gfw)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"zone_snapshot failed: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+        raise _internal_failure("zone snapshot", e)
 
 
 @app.get("/api/v1/grid")
@@ -473,7 +576,7 @@ def get_grid(
     try:
         return grid_snapshot(min_lat, max_lat, min_lon, max_lon, date, step_deg, include_gfw)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"grid_snapshot failed: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+        raise _internal_failure("grid snapshot", e)
 
 
 @app.get("/api/v1/reason")
@@ -498,11 +601,11 @@ def get_reason(
         return insight
 
     try:
-        return _with_deadline(_run, 110, "10-agent analysis")
+        return _with_deadline(_run, 110, "11-stage agent analysis")
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"reason failed: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+        raise _internal_failure("reasoning", e)
 
 
 # ── Phase-4: deterministic advisory ──
@@ -528,7 +631,7 @@ def get_advisory(
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"advisory failed: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+        raise _internal_failure("advisory", e)
 
 
 # ── Field Explorer: real sampled grid view (spots/waves/wind map) ──
@@ -538,16 +641,20 @@ def get_field(
     lat: float = Query(..., ge=-90, le=90),
     lon: float = Query(..., ge=-180, le=180),
 ) -> dict[str, Any]:
-    """9x9 sampled grid of REAL chlorophyll + waves + wind around the
-    point, plus productivity hotspots. Drives the Visual Explorer map.
-    Cached 30 min per 0.1° centre; budgeted so a click always answers."""
+    """Sampled chlorophyll, wave and wind grids around a point.
+
+    The compatibility ``hotspots`` field only ranks high chlorophyll cells; it
+    is not a PFZ, HAB diagnosis, catch estimate, or fishing recommendation.
+    Cached 30 min per 0.1° centre; source failures return explicit empty/error
+    sections instead of fabricated samples.
+    """
     from pipeline.field_explorer import get_field as _get_field
     try:
         return _with_deadline(lambda: _get_field(lat, lon), 60, "field")
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"field fetch failed: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+        raise _internal_failure("field fetch", e)
 
 
 # ── OSM tile proxy: real map tiles for the 3D ocean surface ────────
@@ -582,7 +689,7 @@ def route_check(
     try:
         return compute_sea_route(from_lat, from_lon, to_lat, to_lon)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"route check failed: {type(e).__name__}: {e}")
+        raise _internal_failure("route check", e)
 
 
 @app.get("/api/v1/route-advisory")
@@ -603,7 +710,7 @@ def route_advisory(
     try:
         return cached(key, 1800, lambda: compute(from_lat, from_lon, to_lat, to_lon))
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"route advisory failed: {type(e).__name__}: {e}")
+        raise _internal_failure("route advisory", e)
 
 
 @app.get("/api/v1/voyage")
@@ -612,20 +719,21 @@ def voyage_recommend(
     lon: float = Query(..., ge=-180, le=180),
     max_km: float = Query(120.0, ge=20.0, le=400.0),
 ) -> dict[str, Any]:
-    """"TU analyze kar ke bata — kahan jaun?" Recommends fishing
-    destinations from REAL sources only: today's official INCOIS PFZ
-    advisory lines (nearest point on each actual line) + land-masked
-    NOAA chlorophyll hotspots, each gated by the live marine forecast
-    at that exact spot. Score is fully auditable (reasons list per
-    candidate); safety state comes from the same advisory thresholds.
-    Zero invented points — if sources fail, found:false + reasons."""
+    """Return candidate points derived only from official INCOIS PFZ lines.
+
+    Each point carries a separate marine-weather evidence state. The numeric
+    score is an explicitly experimental ordering by evidence state, distance,
+    and optional crowd context; it is not an INCOIS score, catch probability,
+    or safety certification. If official geometry is unavailable, returns
+    ``found:false`` with the provider reason and no invented candidate.
+    """
     from pipeline.ttlcache import cached
     from pipeline.voyage import recommend
     key = f"voyage:{lat:.3f}:{lon:.3f}:{max_km:.0f}"
     try:
         return cached(key, 1800, lambda: recommend(lat, lon, max_km))
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"voyage failed: {type(e).__name__}: {e}")
+        raise _internal_failure("voyage", e)
 
 
 # ── B18: ORCA Live Beacon — "Samudri Rakshak Net" ────────────────────
@@ -821,30 +929,100 @@ def live_stats() -> dict[str, Any]:
 
 @app.get("/api/v1/tiles/{z}/{x}/{y}.png")
 def osm_tile(z: int, x: int, y: int):
-    """Cached OpenStreetMap raster tile (PNG)."""
+    """OSM proxy with bounded disk cache that honours upstream max-age."""
+    return _cached_png_tile(
+        z,
+        x,
+        y,
+        cache_dir=TILE_CACHE_DIR,
+        upstream_url=f"https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        provider="OSM",
+    )
+
+
+@app.get("/api/v1/seamarks/{z}/{x}/{y}.png")
+def openseamap_tile(z: int, x: int, y: int):
+    """Optional OpenSeaMap seamark overlay proxy; not a nautical chart."""
+    return _cached_png_tile(
+        z,
+        x,
+        y,
+        cache_dir=Path("data") / "seamarks",
+        upstream_url=f"https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png",
+        provider="OpenSeaMap",
+    )
+
+
+def _cached_png_tile(
+    z: int,
+    x: int,
+    y: int,
+    *,
+    cache_dir: Path,
+    upstream_url: str,
+    provider: str,
+):
+    """Fetch/cache a display tile without disguising upstream failure."""
+    import re
     import urllib.request
-    from fastapi.responses import FileResponse
+    from fastapi.responses import FileResponse, Response
 
     n = 1 << z if 0 <= z <= 19 else 0
-    if not n or not (0 <= x < n and 0 <= y < n):
+    if not n or not (0 <= x < n) or not (0 <= y < n):
         raise HTTPException(400, "bad tile coordinates")
-    p = TILE_CACHE_DIR / str(z) / str(x) / f"{y}.png"
-    if not p.exists():
-        req = urllib.request.Request(
-            f"https://tile.openstreetmap.org/{z}/{x}/{y}.png", headers=_TILE_HEADERS)
+    path = cache_dir / str(z) / str(x) / f"{y}.png"
+    metadata_path = path.with_suffix(".meta.json")
+    metadata: dict[str, Any] = {}
+    try:
+        if metadata_path.exists():
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        metadata = {}
+
+    fresh = path.exists() and float(metadata.get("expires_at", 0)) > time.time()
+    if not fresh:
+        request = urllib.request.Request(upstream_url, headers=_TILE_HEADERS)
         try:
-            with urllib.request.urlopen(req, timeout=15) as r:
-                blob = r.read()
-        except Exception as e:  # noqa: BLE001
-            raise HTTPException(502, f"OSM tile fetch failed: {type(e).__name__}: {e}")
-        if not blob.startswith(b"\x89PNG"):
-            raise HTTPException(502, "OSM tile server returned a non-PNG response")
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".png.tmp")
-        tmp.write_bytes(blob)
-        tmp.replace(p)
-    return FileResponse(str(p), media_type="image/png",
-                        headers={"Cache-Control": "public, max-age=86400"})
+            with urllib.request.urlopen(request, timeout=15) as response:
+                blob = response.read()
+                cache_control = response.headers.get("Cache-Control", "public, max-age=3600")
+                match = re.search(r"(?:^|,)\s*max-age=(\d+)", cache_control, re.IGNORECASE)
+                no_cache = "no-cache" in cache_control.lower() or "no-store" in cache_control.lower()
+                max_age = 0 if no_cache else (max(60, int(match.group(1))) if match else 3600)
+                metadata = {
+                    "cache_control": cache_control,
+                    "expires_at": time.time() + max_age,
+                    "etag": response.headers.get("ETag"),
+                    "last_modified": response.headers.get("Last-Modified"),
+                }
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ORCA] {provider} tile fetch failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            if not path.exists():
+                raise HTTPException(502, f"{provider} tile fetch failed; see ORCA Box logs.")
+            # A stale fallback remains labelled for revalidation rather than
+            # being assigned a false fresh TTL.
+            metadata["cache_control"] = "no-cache"
+        else:
+            if not blob.startswith(b"\x89PNG"):
+                raise HTTPException(502, f"{provider} tile server returned a non-PNG response")
+            if "no-store" in str(metadata.get("cache_control", "")).lower():
+                return Response(
+                    content=blob,
+                    media_type="image/png",
+                    headers={"Cache-Control": str(metadata["cache_control"])},
+                )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".png.tmp")
+            tmp.write_bytes(blob)
+            tmp.replace(path)
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    headers = {"Cache-Control": str(metadata.get("cache_control", "no-cache"))}
+    if metadata.get("etag"):
+        headers["ETag"] = str(metadata["etag"])
+    if metadata.get("last_modified"):
+        headers["Last-Modified"] = str(metadata["last_modified"])
+    return FileResponse(str(path), media_type="image/png", headers=headers)
 
 
 # ── Phase-4: GeoJSON layers ──
@@ -871,21 +1049,28 @@ def get_layers(
 @app.get("/api/v1/alerts")
 async def get_alerts(
     since: str | None = Query(None, description="ISO timestamp — only alerts issued after this"),
-    lat: float | None = Query(None),
-    lon: float | None = Query(None),
+    lat: float | None = Query(None, ge=-90, le=90),
+    lon: float | None = Query(None, ge=-180, le=180),
 ) -> dict[str, Any]:
     """Current alerts. If lat+lon given, first evaluate REAL conditions
     there (waves/wind/rain thresholds + active JTWC cyclones) and mint
     fresh alerts for anything that crosses a threshold."""
+    if (lat is None) != (lon is None):
+        raise HTTPException(status_code=400, detail="lat and lon must be provided together")
+    evaluation: dict[str, Any] | None = None
     newly: list[dict[str, Any]] = []
     if lat is not None and lon is not None:
-        newly = await asyncio.to_thread(alerts_mod.evaluate, lat, lon)
+        evaluation = await asyncio.to_thread(alerts_mod.evaluate_status, lat, lon)
+        newly = evaluation["alerts"]
         for a in newly:
             await alerts_mod.publish(a)
+    active = alerts_mod.list_alerts(since)
     return {
-        "alerts": alerts_mod.list_alerts(since),
-        "count": len(alerts_mod.list_alerts(since)),
+        "alerts": active,
+        "count": len(active),
         "newly_evaluated": newly,
+        "evaluation": ({k: v for k, v in evaluation.items() if k != "alerts"}
+                       if evaluation is not None else None),
     }
 
 
@@ -893,7 +1078,9 @@ async def get_alerts(
 async def simulate_alert(payload: dict[str, Any]) -> dict[str, Any]:
     """Create a clearly-labelled DEMO alert (simulated=true, 🧪 DEMO prefix)
     so the disaster-drill flow can be shown without faking real data,
-    and push it to all connected WebSocket clients."""
+    and push it to all connected clients. Disabled by default."""
+    if os.environ.get("ORCA_DEMO_MODE", "0") != "1":
+        raise HTTPException(status_code=403, detail="Demo alert simulation is disabled on this ORCA Box.")
     kind = str(payload.get("type", "cyclone"))
     lat = float(payload.get("lat", 20.9))
     lon = float(payload.get("lon", 70.37))
@@ -928,7 +1115,7 @@ async def chat_once(payload: dict[str, Any]) -> dict[str, Any]:
             payload.get("lang"),
         )
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"chat failed: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+        raise _internal_failure("chat", e)
 
 
 # ── Phase-4: feedback (stored, not dropped) ──
@@ -948,7 +1135,69 @@ def post_feedback(payload: dict[str, Any]) -> dict[str, Any]:
     return {"stored": True, "record": record}
 
 
-# ── Phase-4: WebSocket chat trace + alert push ──
+# ── Live alert stream + WebSocket chat trace ──
+
+def _sse_frame(event: str, data: Any, *, event_id: str | None = None) -> str:
+    lines = []
+    if event_id:
+        lines.append(f"id: {event_id}")
+    lines.append(f"event: {event}")
+    encoded = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    lines.extend(f"data: {line}" for line in encoded.splitlines() or [""])
+    return "\n".join(lines) + "\n\n"
+
+
+@app.get("/api/live/stream")
+async def live_alert_stream(request: Request) -> StreamingResponse:
+    """SSE alert channel with active-alert replay and heartbeat frames.
+
+    ``Last-Event-ID`` resumes after a known active alert. Since Phase-1 alert
+    storage is bounded in memory, an unknown/expired id replays every currently
+    active alert rather than pretending durable replay exists.
+    """
+    queue = alerts_mod.subscribe()
+    last_event_id = request.headers.get("last-event-id")
+
+    async def events():
+        try:
+            yield _sse_frame("connected", {
+                "status": "connected",
+                "server_time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "replay": "active alerts in memory",
+            })
+
+            active = alerts_mod.list_alerts()
+            if last_event_id:
+                indexes = [i for i, alert in enumerate(active) if alert.get("id") == last_event_id]
+                replay = active[indexes[0] + 1:] if indexes else active
+            else:
+                replay = active
+            for alert in replay:
+                yield _sse_frame("alert.push", alert, event_id=alert.get("id"))
+
+            while not await request.is_disconnected():
+                try:
+                    message = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    if message.get("type") == "alert.push":
+                        alert = message.get("alert", {})
+                        yield _sse_frame("alert.push", alert, event_id=alert.get("id"))
+                except asyncio.TimeoutError:
+                    yield _sse_frame("heartbeat", {
+                        "server_time": datetime.now(timezone.utc).isoformat(timespec="seconds")
+                    })
+        finally:
+            alerts_mod.unsubscribe(queue)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
 
 @app.websocket("/ws/chat")
 async def ws_chat(ws: WebSocket) -> None:
@@ -1051,6 +1300,11 @@ except ImportError:
 @app.on_event("startup")
 def _warm_caches() -> None:
     import threading
+
+    # Network-heavy warm-up is opt-in. This keeps normal startup deterministic
+    # and avoids consuming provider quotas before a user asks for data.
+    if os.environ.get("ORCA_WARMUP", "0") != "1":
+        return
 
     def _warm() -> None:
         import os as _os

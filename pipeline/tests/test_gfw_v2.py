@@ -5,21 +5,23 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from pipeline import gfw
 
 
-def test_gfw_parse_total_field():
-    """GFW returns {'total': float, 'entries': [...]} — make sure we read 'total'."""
+def test_gfw_total_counts_groups_not_fishing_hours():
+    """Current v3 ``total`` is a result count; sum measured entry hours."""
     gfw._make_request = lambda *a, **kw: {
-        "total": 497.88,
+        "total": 1,
         "entries": [
-            {"date": "2026-05-06", "vesselIDs": ["v1", "v2", "v3"], "hours": 12.4},
-            {"date": "2026-05-07", "vesselIDs": ["v2", "v3", "v4"], "hours": 15.0},
+            {"public-global-fishing-effort:v4.0": [
+                {"date": "2026-05", "vesselId": "v1", "hours": 12.4},
+                {"date": "2026-05", "vesselId": "v2", "hours": 15.0},
+            ]},
         ],
     }
     r = gfw.get_fishing_effort(19.0, 72.8, "2026-05-01", "2026-06-01", token="dummy")
     assert r is not None
-    assert r["hours"] == 497.88, f"Expected 497.88 from 'total' field, got {r['hours']}"
-    assert r["vessel_ids"] == 4, f"Expected 4 unique vessels, got {r['vessel_ids']}"
-    assert sorted(r["vessel_id_sample"]) == ["v1", "v2", "v3"]
-    print("✅ test_gfw_parse_total_field passed")
+    assert r["hours"] == 27.4
+    assert r["vessel_ids"] == 2
+    assert sorted(r["vessel_id_sample"]) == ["v1", "v2"]
+    print("✅ test_gfw_total_counts_groups_not_fishing_hours passed")
 
 
 def test_gfw_parse_grouped_by_dataset():
@@ -36,6 +38,7 @@ def test_gfw_parse_grouped_by_dataset():
     }
     r = gfw.get_fishing_effort(10.0, 70.0, "2026-05-01", "2026-06-01", token="dummy")
     assert r is not None
+    assert r["hours"] == 18.0
     assert r["vessel_ids"] == 3
     print("✅ test_gfw_parse_grouped_by_dataset passed")
 
@@ -110,7 +113,7 @@ def test_gfw_query_url_encodes_colons():
 
 
 if __name__ == "__main__":
-    test_gfw_parse_total_field()
+    test_gfw_total_counts_groups_not_fishing_hours()
     test_gfw_parse_grouped_by_dataset()
     test_gfw_no_token()
     test_gfw_vessels_in_region_by_flag()

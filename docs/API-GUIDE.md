@@ -1,155 +1,224 @@
-# ORCA — Complete API Guide
+# ORCA — Complete API and Integration Guide
 
-> **SIH26176 (ISRO) · Marine EcOsystem Reasoning with Collaborative Agents**
-> Ek hi sachchai: **har number ka source named hai, har failure ka reason
-> honest hai, koi dummy/placeholder data kahin nahi.**
+> **SIH26176 (ISRO) · Marine Ecosystem Reasoning with Collaborative Agents**
+>
+> **Audit conclusion (2026-09-12): all integrations are not currently
+> working.** A real hostname, a written adapter, a mocked unit test, cached
+> output, or a 200 response from `/health` is not evidence that a provider
+> returned live data.
 
-Yeh guide 3 cheezein batati hai:
-1. **External APIs** — humne kahan se uthaya (real hosts, gov agencies), kis
-   feature ke liye, unse kya data fetch hota hai, abhi status kya hai
-2. **ORCA ke apne endpoints** (`/api/v1/*`) — kaun kya deta hai, params,
-   response, kaun consume karta hai (app tab / web / judges)
-3. **Data-flow + verdict rules + caching/honesty policy** — judge ke har
-   "ye number aaya kahan se?" ka jawab
+This guide separates four questions that must not be conflated:
 
----
+1. **Real service:** does the named host/product exist?
+2. **Wired:** does production backend code actually call it?
+3. **Configured here:** are required credentials/dependencies present in this checkout/runtime?
+4. **Live-successful here:** did a forced request return usable provider data during this audit?
 
-## 1. Architecture — flow of real data
+## 1. Phase-1 data flow actually present
 
-```
-        EXTERNAL SOURCES (12)                          CONSUMERS
- ┌───────────────────────────────┐
- │ Satellites  : MOSDAC OCM-3    │        ┌──────────────────────┐
- │               OC-CCI · NOAA   │        │ Flutter app (6 tabs) │
- │ Models      : Open-Meteo      │        │  · Home advisory     │
- │               (MeteoFrance /  │        │  · Map probe         │
- │               ECMWF IFS)      │  HTTP  │  · Navigate+verdict  │
- │ Activity    : Global Fishing  │ ─────► │  · AI 10 agents      │
- │               Watch (AIS)     │        │  · SOS context       │
- │ Advisories  : INCOIS PFZ/LAS  │        │ Next.js web dashboard│
- │ Storms      : JTWC (US Navy)  │        │ tools/ verify scripts│
- │ Terrain     : GLOBE 1km (off.)│        │ curl/judges          │
- └───────────────┬───────────────┘        └──────────────────────┘
-                 ▼
-     pipeline/*.py fetchers (timeouts + retries + honest failure notes)
-                 ▼
-   caches: SQLite blob (big NetCDF) + in-memory TTL (small JSON)
-                 ▼
-   engines: zone snapshot · 10-agent reasoner · advisory (WMO/IMD
-           thresholds) · route-check (GLOBE 2-km sampling) ·
-           transit verdict (30-km sampling × live forecast)
-                 ▼
-            backend/main.py (FastAPI) → /api/v1/*
+```text
+Flutter Android client / Next.js web client
+              │
+              │ HTTP, SSE, WebSocket (no direct scientific-provider calls)
+              ▼
+backend/main.py — the single authoritative FastAPI backend
+              │
+              ├─ deterministic advisory / route / alert / GIS rules
+              ├─ eleven-stage analytical trace
+              ├─ optional local Ollama explanation (not safety computation)
+              └─ pipeline provider adapters
+                    ├─ Open-Meteo Marine / Forecast / Archive
+                    ├─ NOAA CoastWatch ERDDAP / ESA OC-CCI
+                    ├─ INCOIS LAS / official PFZ WFS
+                    ├─ optional MOSDAC / optional GFW
+                    ├─ supplemental JTWC guidance
+                    ├─ MarineRegions, OSM and optional OpenSeaMap display layers
+                    └─ local GLOBE 1 km land mask
 ```
 
----
+What is **not** present in this checkout:
 
-## 2. External APIs — kahan se, kisliye, kya milta hai
+- PostgreSQL/PostGIS and authoritative EEZ/MPA/restricted-zone GIS storage;
+- RAG retrieval (the agent registry reports it unavailable);
+- Supabase routes/storage (core safety remains independent of Supabase);
+- a running Ollama server/model in the audited runtime;
+- active SQLite/blob caching. Active caches are in-memory TTL caches, an OSM
+  tile disk cache, and provider-specific downloaded-file handling.
 
-> "Working?" ka jawab **runtime `/api/v1/health` se live milta hai** — neeche
-> table me wahi status likha hai jo health ne last verify kiya.
+## 2. External service audit
 
-| # | Source (agency) | Host (real) | Auth | Kya fetch hota hai | ORCA me use | Status* |
-|---|---|---|---|---|---|---|
-| 1 | **Open-Meteo Marine** (MeteoFrance MFWAM / ECMWF WAM wave models) | `marine-api.open-meteo.com` | none | hourly: wave height, swell, **SST**, ocean **current speed+direction** — 96 h horizon | every advisory, safe window, transit verdict, map probe, 48-h chart | ✅ live |
-| 2 | **Open-Meteo Forecast** (ECMWF IFS) | `api.open-meteo.com` | none | hourly wind, gusts (48-h gale check via WMO 34 kn), rain | advisory rules, verdict, chart | ✅ live |
-| 3 | **Open-Meteo Daily** | `api.open-meteo.com` | none | daily sky condition (WMO codes) | verdict context | ✅ live |
-| 4 | **Open-Meteo Archive** | `archive-api.open-meteo.com` | none | past-year hourly (2024/2025) — **anomaly baseline** | Anomaly agent ("aaj vs normal") | ⚠️ engine ready; host flaky from some networks — failure shown honestly |
-| 5 | **NOAA CoastWatch ERDDAP** (US NOAA NESDIS) | `coastwatch.noaa.gov` | none | satellite **chlorophyll-a** (mg/m³); retry chain today → **3-day lag → 7-day lag**; DINEOF gap-filled product walks back 14 days | fish-food map, hotspots, field layer | ✅ live |
-| 6 | **ESA OC-CCI v6** (European Space Agency ocean colour — via NOAA's ERDDAP mirror) | `comet.nefsc.noaa.gov` | none | chlorophyll (independent cross-check of #5) | chlorophyll cross-validation | ✅ live — but **monsoon clouds physically block optical sensing**; we SAY "cloud-masked" instead of faking |
-| 7 | **ISRO MOSDAC** (India's own — Oceansat-3 **OCM-3**) | `mosdac.gov.in` | username+password (`.env`, never committed) | OCM-3 chlorophyll granules (NetCDF/HDF5) — real SSO login → search → download with a **24 s honest wall cap** so a slow GOI link never hangs the skipper | India-primary chlorophyll | ✅ live (link slow at times — background retry, 10-min cool-down, reason named) |
-| 8 | **INCOIS ERDDAP** (Indian Nat'l Centre for Ocean Info Services) | `erddap.incois.gov.in` | none | Indian-region chlorophyll/ocean products | region fallback | ✅ live |
-| 9 | **INCOIS LAS** (Live Access Server) | `las.incois.gov.in` | none | SST / ocean params (SIGALRM-capped, 12–30 s) | fallback only | ⚠️ "server unreliable" (their side) — honestly labelled; never blocks a verdict |
-| 10 | **INCOIS PFZ — official daily govt advisory lines** | `incois.gov.in` (GeoServer WFS `PFZ_Automation:pfzlines`) | none | today's **Potential Fishing Zone** line geometry | map/PFZ features + upcoming tap-sheet zones | ✅ live |
-| 11 | **Global Fishing Watch** (AIS-derived) | `gateway.api.globalfishingwatch.org` | API token (`.env`) | fishing **effort** (hours/km²) + **fleet/vessel** lists per region; **429 → 15 s backoff, retry once** | fleet-presence context, agents | ✅ live |
-| 12 | **JTWC** (US Navy Joint Typhoon Warning Center) | `www.metoc.navy.mil` | none | active tropical **cyclone warnings** (text, parsed) | alerts feed, risk agent | ✅ live |
-| 13 | **GLOBE 1 km land mask** (offline raster) | bundled data (no network) | none | land/water classification, 1 km resolution | **course verification every 2 km**, detour computation, land-masking chlorophyll pixels (stops on-land "hotspots") | ✅ 100 % offline — demo works with internet OFF |
-| 14 | **Nominatim** (OpenStreetMap) — app-side | `nominatim.openstreetmap.org` | none (polite UA) | harbour/beach/village search | app map search | ✅ live |
+**Live test location:** offshore Gujarat control point `20.90 N, 69.80 E`.
+**Test date:** 2026-09-12. “Failed here” describes this runtime, not a claim
+that the public provider is globally down.
 
-\* Status ko fresh verify karna ho to: `curl localhost:8000/api/v1/health`
+| Source / host | Real service? | Production adapter wired? | Configured in this checkout? | Forced live result here | Honest backend behaviour |
+|---|---:|---:|---:|---|---|
+| **Open-Meteo Marine** — `marine-api.open-meteo.com` | Yes | Yes — `forecast.py`, `openmeteo_sst.py`, field/route/advisory paths | Yes; no key required | **No usable data:** TLS connection closed with EOF | Scientific values stay absent; advisory/route become `unknown`; failure is listed |
+| **Open-Meteo Forecast** — `api.open-meteo.com` | Yes | Yes — wind, gust, rain, weather-code, alert paths | Yes; no key required | **No usable data:** TLS EOF | No calm/all-clear is inferred from missing wind/gust/weather evidence |
+| **Open-Meteo Daily** — `api.open-meteo.com` | Yes | Yes — daily weather agent/advisory context | Yes; no key required | **No usable data:** TLS EOF | Daily weather remains unavailable and blocks a `go` verdict |
+| **Open-Meteo Archive** — `archive-api.open-meteo.com` | Yes | Yes — bounded anomaly baseline | Yes; no key required | **No usable data:** remote access failed in the forced audit | Anomaly status is `unknown`; no baseline is fabricated |
+| **NOAA CoastWatch ERDDAP** — `coastwatch.noaa.gov` | Yes; configured dataset IDs are real | Yes — chlorophyll point/grid and fallback chain | Yes; no key required | **No usable data:** all configured datasets ended in TLS EOF | Returns exact attempted-dataset failure; no chlorophyll value is invented |
+| **ESA OC-CCI v6** via `comet.nefsc.noaa.gov` | Yes | Yes — optional independent chlorophyll comparison | Yes; no key required | **No usable data:** TLS EOF | Cross-check is marked unavailable; code does not assume the cause was cloud |
+| **ISRO MOSDAC OCM-3 L2C LAC** — `mosdac.gov.in` / `www.mosdac.gov.in` | Yes | Yes — optional login/search/download/extract cross-check | **No:** `MOSDAC_USERNAME` and `MOSDAC_PASSWORD` are absent | Not authenticated/tested | Adapter remains disabled and says credentials are required; it is not called “live” or the primary source |
+| **INCOIS ERDDAP** — `erddap.incois.gov.in` | Yes | **No selected data adapter:** URL is catalogued, current code does not query it | N/A | Not tested through ORCA | `/health` reports `not_integrated`; it is not described as a fallback |
+| **INCOIS LAS OPeNDAP** — `las.incois.gov.in` | Yes | Yes — conditional backup chlorophyll path | Yes; no key required | **No usable data:** NetCDF I/O failure | Failure is listed; NOAA/OC-CCI remain separate attempts; no blame that INCOIS is globally broken |
+| **INCOIS official PFZ WFS** — `incois.gov.in`, layer `PFZ_Automation:pfzlines` | Yes; official host/product | Yes — layer, nearest-PFZ, voyage candidate paths | Yes; no key required | **No usable geometry:** TLS EOF | `/voyage` returned `found:false`; `/layers` reported the PFZ error; no candidate point was invented |
+| **Global Fishing Watch v3** — `gateway.api.globalfishingwatch.org` | Yes; v3 docs and nested report shape verified | Yes — effort and vessel/fleet context | **No:** `GFW_API_TOKEN`/`GFW_TOKEN` absent | Not authenticated/tested | Calls return “token not set”; no cached value masks auth/quota errors; parser supports nested `hours` and singular `vesselId` |
+| **Ollama local HTTP API** — default `127.0.0.1:11434`, model `qwen3:8b` | Yes; locally deployed service | Yes — optional evidence-grounded explanation only | Host/model defaults exist, but no server/model is running here | Active health probe returned connection refused and `available:false` | Deterministic agents, advisory, and chat routing continue without LLM enrichment; safety logic never moves into Ollama |
+| **JTWC** — `www.metoc.navy.mil` | Yes | Yes — cyclone parser, alerts, advisory, layer | Yes; no key required | **No usable bulletin:** TLS EOF | Returns an error and does not claim a successful “no cyclone” check. JTWC is supplemental U.S. DoD guidance; IMD/RSMC New Delhi is the official Indian authority |
+| **GLOBE 1 km land mask** — local `global-land-mask` data | Yes | Yes — route/GIS/field land checks | **Yes** | **Passed locally:** `20.90,70.37` classified land; `20.90,69.80` water | Returns `None`/unverified if the mask is unavailable; no bounding box is used as an EEZ |
+| **OpenStreetMap tile service** — `tile.openstreetmap.org` | Yes | Yes — first-party tile proxy with bounded cache | Yes; no key required | **Failed here:** ORCA returned HTTP 502 because no tile/cached fallback was available | 502 is explicit; an existing stale tile may be served with `no-cache`, never relabelled fresh |
+| **OpenSeaMap seamarks** — `tiles.openseamap.org` | Yes | Yes — optional web overlay now uses a first-party bounded-cache proxy | Yes; no key required | **Failed here:** direct TLS failed and ORCA returned HTTP 502 with no cached fallback | Failure is explicit at the proxy; this overlay is not an official nautical chart and is off by default |
+| **Nominatim** — `nominatim.openstreetmap.org` | Yes | **No** production search datasource is wired | N/A | Not tested through ORCA | `/health` reports `not_integrated`; the client catalog must not imply search works |
+| **MarineRegions WFS** — `geo.vliz.be` | Yes | Yes — optional EEZ **display** feature in `/layers` | Yes; no key required | **No usable feature** in the endpoint audit | `/layers` reports `MarineRegions EEZ: upstream feature unavailable`; the GIS/safety agent does not use this optional layer for legal claims |
 
-### Honesty in action (last verified on phone, Mumbai/Veraval points)
-- *"OC-CCI: all pixels within ±0.75° are cloud-masked today (monsoon cover —
-  satellites can't see through clouds). NOAA primary is used."*
-- *"NOAA ERDDAP (today, 3-day & 7-day lag tried): all ERDDAP datasets failed"*
-- *"MOSDAC OCM-3: download too slow (> 24 s wall cap) — background retry in
-  ~10 min"* ← ye cap/feature hai, crash nahi
-- Validation agent card shows e.g. **"3/7 sources OK"** — weak coverage bhi
-  dikh bigay, chhipaya nahi.
+### Important interpretation
 
----
+- `/api/v1/health` is deliberately **non-probing**. `wired`, `not_probed`,
+  `configured`, and `available` for a local component do not mean the remote
+  host answered now.
+- HTTPS failures in this runner consistently ended with TLS EOF. That is
+  evidence of failure from this environment, not proof that every provider was
+  down worldwide.
+- GFW and MOSDAC are blocked by missing credentials, independently of the
+  runner's network problem.
+- INCOIS ERDDAP and Nominatim were documentation/catalog entries, not live
+  integrations; they are now labelled `not_integrated`.
 
-## 3. ORCA's own API — `GET /api/v1/*` (FastAPI)
+## 3. ORCA endpoint audit
 
-Base URL locally: `http://<laptop-IP>:8000` (app ke Info tab me set hota hai).
-Convention: sab responses **sources_used / sources_failed** ke saath —
-evidence-first.
+The backend was restarted from the edited checkout before the final contract
+run. The production-mode core run exercised **24 HTTP calls**: 19 returned
+intended 2xx responses, two validation/size-guard calls returned the intended
+400, the disabled drill-alert route returned the intended 403, and the
+OSM/OpenSeaMap tile proxies returned the intended explicit 502 upstream
+failures. The
+separate two-boat rescue drill exercised another **16 HTTP calls**, all of
+which returned 200. A 2xx scientific response only proves the ORCA contract
+worked; it may correctly contain no observations plus explicit source
+failures.
 
-| Endpoint | Kya karta hai | Key params → return | Kaun use karta hai |
+### Core and scientific endpoints
+
+| Endpoint | Parameters/body | Backend status | 2026-09-12 result |
 |---|---|---|---|
-| `GET /api/v1/health` | source-by-source live status, credentials presence, cache stats | — → `{status, version, build_commit, data_sources{…}, cache{…}}` | app Info tab "Check" button, demo pre-flight |
-| `GET /api/v1/zone` | ek spot ka full snapshot (waves, SST, CHL, current, GFW…) | `lat, lon` → zone object | map probe, agents |
-| `GET /api/v1/grid` | area grid snapshot (map painting) | `lat, lon, span` → points[] | web map, field tiles |
-| `GET /api/v1/reason` | **10 collaborative agents** same data pe (risk/ecology/anomaly/validation …) | `lat, lon, date?, include_gfw?, agents?` → `{agents:[{agent, summary, verdict}], overall_risk, data_coverage{known,total,sources_failed}, …}` | app **AI tab** |
-| `GET /api/v1/advisory` | skipper verdict — WMO/IMD small-craft thresholds, bilingual plain lines, safe window, variables, hourly chart | `lat, lon` → `{verdict, color, headline, headline_hi, plain_en[], plain_hi[], variables{…}, safe_window, hourly_chart, sources…}` | app **Home**, Navigate destination card |
-| `GET /api/v1/field` | field explorer (chlorophyll + met grid, land-masked) | `lat, lon` | app Map probe deep-dive |
-| `GET /api/v1/route-check` | course verifier: rhumb line **har 2 km** GLOBE mask; land lage → **1 REAL computed detour waypoint** (16 angles × 5 radii); woh bhi na chale → ⭐ **SEA-PATH ENGINE: A\* over pooled GLOBE (0.08° cells, 3×3 probes/cell, coast +1 cell), greedy legs har hop native 1 km re-verified** — Sri Lanka-rounding class reroute ~2 s mein; na mile → honestly `ok:false` | `from_lat, from_lon, to_lat, to_lon` → `{ok, detour, rerouted?, waypoints?, straight_distance_km/nm?, legs[[lat,lon]…], land_hit?, reason, distance_km/nm, bearing_deg, method}` | web **/navigate** cyan reroute banner + waypoint dots; app **Navigate** polyline + verified badge |
-| `GET /api/v1/route-advisory` | **TRANSIT VERDICT** — "yahan se wahan safe?" PUREE route ka: legs har ~30 km sample (≤5 pts, detour waypoint hamesha kept) × **5 parallel live forecasts** → per-point `good/caution/danger/unknown` (advisory ke SAME thresholds) → worst-case fold `go/caution/nogo/unknown` + start-point **safest departure window** | same params → `{verdict{level, points_known/total, land_verified}, points[{sail_km, wave_m, wind_kn, state, why/note}], safe_window_at_start, sources…}` | app **Navigate** verdict card |
-| `GET /api/v1/tiles/{z}/{x}/{y}.png` | server-rendered **PNG data tiles** (real data → real pixels) | xyz slippy coords | web map layer |
-| `GET /api/v1/layers` | available data layers metadata | — | web |
-| `GET /api/v1/alerts` | active alert cards (JTWC cyclones + rule flags) | — | app/web alerts hook |
-| `GET /api/v1/alerts/simulate` | **clearly-labelled demo injector** (never mixed with real feed) | — | demo script only |
-| `GET /api/v1/agents` | 10-agent registry (id, role, sources, implemented) | — | app AI tab header, judges |
-| `GET /api/v1/datasets` · `/zones` | dataset/zone catalogs + provenance | — | web, field explorer |
-| `POST /api/v1/chat` + `WS /ws/chat` | optional LLM chat on top of live data (Ollama) | currently **paused by design choice** — returns honest unavailable | future |
-| `POST /api/v1/feedback` | skipper feedback capture | `{…}` → stored | app |
+| `GET /` | — | Wired | 200; service metadata returned |
+| `GET /api/v1/health` | — | Wired, non-probing | 200; correctly showed GFW/MOSDAC unconfigured and Ollama/RAG/PostGIS/Supabase unavailable/not probed as applicable |
+| `GET /api/v1/ollama/health` | — | Active probe | 200 contract; `available:false`, `status:unavailable` |
+| `GET /api/v1/agents` | — | Wired | 200; eleven stages; RAG explicitly unavailable |
+| `GET /api/v1/datasets` | — | Wired metadata | 200; catalog only, not provider liveness evidence |
+| `GET /api/v1/zones` | — | Wired static starting coordinates | 200; eight coordinates, not observations |
+| `GET /api/v1/zone` | `lat`, `lon`, optional `date`, `radius_deg`, `include_gfw` | Wired to provider adapters | 200 degraded; zero successful remote sources and five named failures in the tested request |
+| `GET /api/v1/grid` | `min_lat`, `max_lat`, `min_lon`, `max_lon`, optional `step_deg`, `date`, `include_gfw` | Wired; GFW size guard | 200 degraded; one requested cell, no fabricated values, per-cell failures retained |
+| `GET /api/v1/reason` | `lat`, `lon`, optional `date`, `include_gfw`, `agents` | Wired eleven-stage trace | 200; eleven stages, analytical risk `unknown`, no synthetic PFZ score. This endpoint never emits a skipper `go`; `/advisory` owns that decision |
+| `GET /api/v1/advisory` | `lat`, `lon`, optional `date`, `include_gfw` | Authoritative deterministic skipper verdict | 200; `verdict:unknown`, no sources used, seven failures. Missing wave/wind/gust/daily-weather/cyclone evidence cannot become `go` |
+| `GET /api/v1/field` | `lat`, `lon` | Wired sampled NOAA/Open-Meteo view | 200 degraded; zero chlorophyll/met samples and explicit errors. Legacy `hotspots` means highest chlorophyll cells only—not PFZ, HAB, fish/catch, or advice |
+| `GET /api/v1/route-check` | `from_lat`, `from_lon`, `to_lat`, `to_lon` | Wired local GLOBE check | 200; tested sea control returned `ok:true`, `detour:false` |
+| `GET /api/v1/route-advisory` | same four coordinates | Wired GLOBE + per-point forecast fold | 200 degraded; 0/3 known points and corrected `verdict.level:unknown` (not caution/go) |
+| `GET /api/v1/voyage` | `lat`, `lon`, optional `max_km` | Wired to official PFZ geometry only | 200 degraded; `found:false`, zero recommendations, PFZ failure named. If data exists, `score` is labelled experimental ordering—not INCOIS score, catch probability, or safety certificate |
+| `GET /api/v1/layers` | optional `bbox`, `types=official_pfz,cyclone,port,eez` | Wired | 200; only three static port features in the tested `68.5,19.5,73.5,22.5` bbox; port citations labelled pending; PFZ/JTWC/MarineRegions failures listed and failed JTWC was not claimed as used |
+| `GET /api/v1/tiles/{z}/{x}/{y}.png` | XYZ tile coordinates | Wired OSM base-map proxy | HTTP 502; honest upstream failure, not a fake image |
+| `GET /api/v1/seamarks/{z}/{x}/{y}.png` | XYZ tile coordinates | Wired optional OpenSeaMap overlay proxy | HTTP 502; honest upstream failure, not a fake nautical overlay. The overlay is not an official chart |
 
-*(Kuch legacy aliases bhi mount hain for backwards compatibility; canonical
-paths = `/api/v1/*`.)*
+### Alerts, chat, feedback, and streams
 
----
-
-## 4. Decision rules (exact — koi hidden weight nahi)
-
-Verdict **worst-case fold** hai (average danger chhupa nahi sakta):
-
-| Signal | 🟢 good | 🟠 caution | 🔴 danger |
-|---|---|---|---|
-| wave (now ya 48-h max) | < 2.5 m | ≥ **2.5 m** | ≥ **4.0 m** |
-| gusts (48-h max) | < 34 kn | — | ≥ **34 kn** (WMO gale) |
-| sustained wind (48-h max) | < 20 kn | ≥ **20 kn** (Beaufort 5) | — |
-| surface current | ≤ 3 kn | > 3 kn → honest **note** (not a state) | — |
-
-Land: GLOBE 2-km sampling — `blocked` ⇒ NO-GO regardless of weather;
-`detour` ⇒ real waypoint listed; mask missing ⇒ `unverified` (kabhi "safe"
-nahi bolte).
-
----
-
-## 5. Caching / politeness policy (servers pe bojh nahi)
-
-| Kya | TTL / cap | Kyun |
+| Endpoint | Contract | 2026-09-12 result |
 |---|---|---|
-| point forecast cache (0.25° cell) | 30 min | Open-Meteo hammering zero |
-| route-advisory | 30 min TTL | 5-point analysis reuse |
-| MOSDAC download | **24 s wall cap**, 10-min cool-down | GOI link slow — app kabhi latkti nahi |
-| GFW 429 burst | 15 s wait, **retry exactly once** | token quota respect |
-| chlorophyll lags | today → 3d → 7d (DINEOF ≤ 14 d) | satellite reality ke saath honest |
-| ⭐ **last-known-good fallback** (NOAA·OC-CCI·MOSDAC·INCOIS·GFW) | success yaad rehti hai **6 h** | live hiccup (baadal/server slow) pe hard-fail nahi — last REAL reading, `_stale` + age **likhkar** dikhaya (kabhi fresh jaisa nahi). GFW token/quota error pe fallback NAHI — uska asli fix token hi hai, mask karna imandari nahi |
-| fetch transient retry | 1 retry, 2 s gap | ISP/web-shield TLS hiccup instantly maaf; fail → honest failed |
+| `GET /api/v1/alerts` | optional `since`; `lat` and `lon` must appear together | 200. Coordinate evaluation returned no alerts **and** two provider failures; `evaluation.sources_failed` makes clear this was not an all-clear |
+| `POST /api/v1/alerts/simulate` | `{type, lat, lon}`; enabled only with `ORCA_DEMO_MODE=1` | 200 in the explicit demo-mode audit; result had `simulated:true`, demo prefix, and demo source. Default production mode returns 403 |
+| `POST /api/v1/chat` | `{message, lat, lon, date?, include_gfw?, lang?}` | 200; deterministic routing/agent execution worked and scientific absence was retained. Ollama is optional enrichment, not required for this route |
+| `POST /api/v1/feedback` | arbitrary JSON object | 200; appended timestamped JSONL locally. This is not Supabase/cloud persistence |
+| `GET /api/live/stream` | SSE; optional `Last-Event-ID` header | Bounded connection passed; `connected` frame and active simulated-alert replay passed, including the unknown/expired-ID path. Replay is active alerts in memory, not durable history |
+| `WS /ws/chat` | JSON events; `{type:"ping"}` supported | WebSocket ping/pong passed; a full chat produced 28 routing/agent-step/token/final events and ended in `chat.final`. It used the same backend pipeline and retained provider failures |
 
-## 6. Cross-check khud karo (judge script)
+### ORCA Live beacon/rescue endpoints
 
-```powershell
-curl "http://localhost:8000/api/v1/health"
-curl "http://localhost:8000/api/v1/route-advisory?from_lat=19.0&from_lon=72.8&to_lat=18.6&to_lon=71.2"
-curl "http://localhost:8000/api/v1/advisory?lat=20.9&lon=70.37"
+These are local in-memory Phase-1 coordination features, not AIS, Coast Guard,
+Supabase, or a durable emergency dispatch service. Silence expires records and
+`stop` deletes the session.
+
+| Endpoints | Bodies/params | Test result |
+|---|---|---|
+| `POST /api/v1/live/start`, `POST /api/v1/live/ping`, `POST /api/v1/live/sos`, `POST /api/v1/live/sos/clear`, `POST /api/v1/live/stop` | session/position payloads described by OpenAPI | Passed end-to-end |
+| `GET /api/v1/live/nearby`, `GET /api/v1/live/sos`, `GET /api/v1/live/boat/{pid}`, `GET /api/v1/live/stats` | coordinates/radius or public boat id as applicable | Passed end-to-end |
+| `POST /api/v1/live/rescue/answer`, `POST /api/v1/live/rescue/complete`, `POST /api/v1/live/rescue/msg` | `{session, case_id, ...}` | Separate two-boat drill passed: SOS dispatch → rescuer receives case → accepts → sends message → completes case |
+
+## 4. Deterministic decision boundaries
+
+These are **ORCA Phase-1 configured policy thresholds**, not universal
+vessel limits and not an IMD/INCOIS navigation certificate. WMO weather codes
+and the 34 kn gale term are provider/meteorological conventions; operational
+use still requires the latest official bulletin and skipper judgement.
+
+| Signal | Below configured caution | Caution | No-go |
+|---|---:|---:|---:|
+| wave now / 48 h maximum | `< 2.5 m` | `>= 2.5 m` | `>= 4.0 m` |
+| sustained wind, 48 h maximum | `< 20 kn` | `>= 20 kn` | — |
+| gust, now / 48 h maximum | `< 28 kn` | `>= 28 kn` | `>= 34 kn` |
+| daily rain total | `< 35 mm` | `>= 35 mm` | `>= 64.5 mm` |
+| regional cyclone distance, when the supplemental JTWC check completes | `>= 800 km` | `< 800 km` | `< 300 km` |
+
+Additional fail-safe rules:
+
+- A single-point `go` requires wave, sustained wind, gust, daily weather-code,
+  and completed regional cyclone evidence.
+- A safe window requires wave, wind, and gust at every included hour.
+- A route point is `good` only with complete wave/wind/gust evidence.
+- Zero known route points reduce to `unknown`.
+- Known danger/no-go evidence still takes precedence when another source is missing.
+- Land-mask `false` means blocked; mask unavailable means unverified, never safe.
+- Chlorophyll and SST are context. They do not independently produce HAB,
+  ecological-health, species, PFZ, catch, or safety verdicts.
+- Authoritative EEZ/MPA/restricted-zone polygons are not integrated. The GIS
+  agent therefore makes no legal boundary or fishing-restriction assertion.
+
+## 5. Provenance, freshness, and caching
+
+| Data/cache | Current behaviour |
+|---|---|
+| Zone snapshot / advisory | In-memory keyed TTL; responses list used and failed sources |
+| Point forecast | 30-minute in-memory TTL by rounded location |
+| Field and route advisory | 30-minute in-memory TTL |
+| Last-known-good provider values | Up to 6 hours for supported providers; labels stale age. Auth/quota errors are not hidden by stale GFW data |
+| NOAA analysis lag | Requested date, then explicit 3-day/7-day fallback attempts where applicable; actual analysis date is returned |
+| OSM/OpenSeaMap display tiles | Separate disk caches honour upstream cache-control; a stale fallback is `no-cache` |
+| Feedback | Local `data/feedback.jsonl`; runtime file is ignored by Git |
+| Live beacon/SSE alerts | Memory only; not durable replay/cloud storage |
+
+Every important returned observation should carry source and observation/
+retrieval time either on the value or its enclosing provider block. Cached
+values must remain labelled with age. Missing values remain absent/`null`.
+
+## 6. Reproduce the checks
+
+```bash
+# Start the single backend authority
+PYTHONPATH=. .venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8000
+
+# Non-probing configuration/capability report
+curl -sS http://localhost:8000/api/v1/health
+
+# Offshore water control point; expect values OR explicit failures, never fixtures
+curl -sS "http://localhost:8000/api/v1/advisory?lat=20.9&lon=69.8&include_gfw=false"
+curl -sS "http://localhost:8000/api/v1/route-advisory?from_lat=20.9&from_lon=69.8&to_lat=20.7&to_lon=69.4"
+curl -sS "http://localhost:8000/api/v1/alerts?lat=20.9&lon=69.8"
+
+# Local deterministic GLOBE route check
+curl -sS "http://localhost:8000/api/v1/route-check?from_lat=20.9&from_lon=69.8&to_lat=20.7&to_lon=69.4"
 ```
 
-Expected (real run, 2026-09-09): transit 174 km, 5/5 points live, wave
-1.02 m → 1.48 m offshore badhti hui — fetch-length physics ke saath match.
+Do not use the old `20.90,70.37` harbour coordinate as an offshore control:
+the bundled GLOBE mask classifies it as land. `20.90,69.80` is the audited
+water control.
 
----
+## 7. Bottom line
 
-*Docs for judges & team · maintained with the code · sister repo:
-[SangamSitapuri07/SIH](https://github.com/SangamSitapuri07/SIH) (frontends).*
+- **Are the named services real?** Mostly yes. Nominatim and INCOIS ERDDAP are
+  real services but are not connected as previously claimed.
+- **Are all real services wired?** No.
+- **Are all wired services configured?** No: GFW and MOSDAC credentials are absent.
+- **Did all wired services return live data here?** No: every forced remote
+  provider attempt failed in this runtime; only local GLOBE succeeded.
+- **Does the backend degrade honestly?** The audited paths now return explicit
+  failures and conservative `unknown`/empty results rather than fabricated
+  observations or false all-clears. OSM returns 502 when no tile is available.

@@ -13,11 +13,9 @@ For real IMD bulletins we'd need to scrape mausam.imd.gov.in or use
 the MOSDAC atmospheric data products. The Open-Meteo source gives us
 ~80% of the value with zero auth.
 
-Risk thresholds (WMO/IMD conventions):
-  - wind < 8 m/s   (Beaufort 5)     : safe for small craft
-  - wind 8-14 m/s  (BF 5-7)          : caution
-  - wind 14-20 m/s (BF 7-8, Gale)    : small craft advisory
-  - wind > 20 m/s  (BF 9+, Storm)    : dangerous — stay on land
+ORCA Phase-1 interpretation bands use Beaufort terminology. They are
+application policy, not an IMD bulletin or vessel-specific certification.
+The deterministic skipper advisory remains the safety authority.
 
 Inputs: ZoneSnapshot (lat, lon, date)
 Outputs: dict of findings
@@ -50,7 +48,7 @@ def _fetch(lat: float, lon: float, start_date: str, end_date: str) -> dict:
     url = f"{WEATHER_URL}?{urllib.parse.urlencode(params)}"
     print(f"[Weather] {lat:.2f},{lon:.2f} {start_date}..{end_date}", file=sys.stderr)
     req = urllib.request.Request(url, headers={"User-Agent": "ORCA/1.0"})
-    with urllib.request.urlopen(req, timeout=8) as r:  # 8s: keep the 10-agent run snappy on slow links
+    with urllib.request.urlopen(req, timeout=8) as r:  # 8s: keep the ten-specialist run snappy on slow links
         return json.loads(r.read().decode("utf-8"))
 
 
@@ -170,7 +168,7 @@ def analyze(snap: dict[str, Any]) -> dict[str, Any]:
                 "type": "gale_warning",
                 "severity": "warn",
                 "value": wind_max,
-                "msg": f"Gale-force winds {wind_max:.1f} m/s (max today, Beaufort 7-8). Small craft advisory.",
+                "msg": f"Wind {wind_max:.1f} m/s (max today, Beaufort 7-8 descriptor) crosses ORCA's caution threshold.",
             })
         elif wind_max >= 10:
             findings.append({
@@ -194,7 +192,7 @@ def analyze(snap: dict[str, Any]) -> dict[str, Any]:
                 "msg": (
                     f"Light winds {wind_max:.1f} m/s sustained (max today"
                     + (f", gusts {gust_max:.1f} m/s)" if gust_max is not None else ")")
-                    + " — safe conditions."
+                    + " — below ORCA's configured wind threshold."
                 ),
             })
 
@@ -293,9 +291,14 @@ def analyze(snap: dict[str, Any]) -> dict[str, Any]:
     elif risk == "moderate":
         summary = f"🌦️ Cautionary weather — wind {wind_max} m/s, {precip or 0}mm rain."
     elif risk == "low":
-        summary = f"🌦️ Favorable weather — wind {wind_max} m/s."
+        summary = f"🌦️ Available weather values are below ORCA's configured thresholds — wind {wind_max} m/s."
     else:
         summary = "🌦️ Weather data unavailable."
+
+    for finding in findings:
+        finding.setdefault("source", SOURCE_LABEL)
+        finding.setdefault("observed_for", target_date)
+        finding.setdefault("retrieved_at", snap.get("fetched_at"))
 
     return {
         "agent": "weather",
@@ -303,4 +306,10 @@ def analyze(snap: dict[str, Any]) -> dict[str, Any]:
         "summary": summary,
         "risk_level": risk,
         "source": SOURCE_LABEL,
+        "evidence": {
+            "wind_available": wind_max is not None,
+            "gust_available": gust_max is not None,
+            "daily_condition_available": wx_code is not None,
+            "complete": wind_max is not None and gust_max is not None and wx_code is not None,
+        },
     }

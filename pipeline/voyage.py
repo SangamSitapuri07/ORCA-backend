@@ -1,22 +1,18 @@
 """Voyage Planner — "TU analyze kar ke bata: kahan jaun?"
 
-Research (docs/VOYAGE-PLANNER.md): two independent REAL sources remain
-useful even when one fails —
+Candidate destinations come only from official INCOIS PFZ advisory-line
+geometry. Generic chlorophyll cells are not converted into fishing
+recommendations: ORCA has no validated species/season/catch model.
 
-  1. INCOIS PFZ  — official daily govt fishing-zone advisory lines.
-                   Candidate point = the REAL nearest point on each line
-                   (from the geometry itself, dated today).
-  2. NOAA chl    — land-masked DINEOF grid → _hotspots(); candidate =
-                   the observed bloom pixel (satellite evidence).
+Each candidate is checked against the point marine forecast using the shared
+route-advisory thresholds. The numeric ``score`` is an explicitly experimental,
+auditable ordering of official PFZ candidates by weather-evidence state,
+distance, and optional crowd-spreading signals. It is not an INCOIS score,
+probability of catch, safety certification, or scientific PFZ model.
 
-Each candidate is then GATED by the live marine forecast at that exact
-spot using the SAME advisory thresholds everywhere else in ORCA.
-Score = 100 + explainable bonuses/penalties (every rupee of the score
-is listed in reasons[] — a judge can audit the arithmetic).
-
-NEVER invented: no PFZ + no hotspots → found:false with both failure
-reasons. A candidate is a coordinate a REAL system (govt advisory or
-satellite) actually gave us today.
+No official PFZ geometry means ``found:false`` with the provider failure/no-data
+reason. Unknown weather remains unknown and is penalized in ranking rather than
+being treated as safe.
 """
 from __future__ import annotations
 
@@ -29,8 +25,11 @@ from pipeline import forecast as fc
 
 MAX_CANDIDATES = 8
 TOP_N = 5
-PFZ_BONUS = 20
-BLOOM_BONUS = 10
+# Compatibility constants used by older clients/tests. All candidates are now
+# official PFZ points, so no source/chlorophyll bonus is applied.
+PFZ_BONUS = 0
+BLOOM_BONUS = 0
+UNKNOWN_WEATHER_PENALTY = 60
 PER_POINT_TIMEOUT_SEC = 35
 
 # B14 crowd-spread: GFW fleet pressure is deep-checked only on the
@@ -49,19 +48,17 @@ CROWD_GFW_STALE_MAX_AGE_SEC = 6 * 3600
 # ── pure scoring (test-pinned, network-free) ───────────────────────
 
 def _score(state: str, kind: str, chl: float | None, dist_nm: float) -> int:
-    """100 base + explainable deltas. Pure — verified by unit tests."""
-    s = 100
-    if kind == "pfz":
-        s += PFZ_BONUS
-    if chl is not None and chl >= 5.0:
-        s += BLOOM_BONUS
-    # safety gates mirror advisory.py exactly
+    """Experimental official-PFZ ordering score; never a catch probability."""
+    del kind, chl  # retained in the internal signature for compatibility
+    score = 100
     if state == "danger":
-        s -= 80
+        score -= 80
+    elif state == "unknown":
+        score -= UNKNOWN_WEATHER_PENALTY
     elif state == "caution":
-        s -= 40
-    s -= int(dist_nm * 0.15 + 0.5)
-    return max(0, s)
+        score -= 40
+    score -= int(dist_nm * 0.15 + 0.5)
+    return max(0, score)
 
 
 def _reasons(state_row: dict[str, Any], kind: str, chl: float | None,
@@ -71,18 +68,21 @@ def _reasons(state_row: dict[str, Any], kind: str, chl: float | None,
     st = state_row.get("state")
     w = state_row.get("wave_m")
     if kind == "pfz" and pfz_meta:
-        out.append(f"official INCOIS PFZ advisory ({pfz_meta.get('advisory_date')}) "
-                   f"+{PFZ_BONUS} — sector {pfz_meta.get('sector_name')}")
-    if chl is not None:
-        tag = "bloom" if chl >= 5.0 else "elevated"
-        out.append(f"chlorophyll {chl:.1f} mg/m³ ({tag}, fish food chain) "
-                   + (f"+{BLOOM_BONUS}" if chl >= 5.0 else "+0"))
+        out.append(
+            f"official INCOIS PFZ advisory ({pfz_meta.get('advisory_date')}); "
+            f"sector {pfz_meta.get('sector_name')} — eligibility only, +0"
+        )
+    # Chlorophyll is deliberately ignored: generic high-chlorophyll pixels do
+    # not establish PFZ/catch suitability. ``chl`` remains a compatibility arg.
+    del chl
     if st == "danger":
         out.append(f"⚠ {state_row.get('why') or 'dangerous sea state'} −80")
+    elif st == "unknown":
+        out.append(f"weather evidence incomplete −{UNKNOWN_WEATHER_PENALTY} (not scored safe)")
     elif st == "caution":
         out.append(f"⚠ {state_row.get('why') or 'rough for small craft'} −40")
     elif w is not None:
-        out.append(f"calm seas {w:.1f} m ±0")
+        out.append(f"configured thresholds not crossed; wave {w:.1f} m ±0")
     out.append(f"{dist_nm:.0f} NM away −{int(dist_nm * 0.15 + 0.5)}")
     return out
 
@@ -141,29 +141,6 @@ def _pfz_candidates(lat: float, lon: float, max_km: float,
     return uniq
 
 
-def _hotspot_candidates(lat: float, lon: float, max_km: float,
-                        notes: list[str]) -> list[dict[str, Any]]:
-    from pipeline import field_explorer as fx
-    try:
-        grid = fx.fetch_chl_grid(lat, lon)
-        pts = grid.get("points") or []
-        if not pts:
-            notes.append(f"NOAA chl grid empty ({grid.get('source')})")
-            return []
-        hs = fx._hotspots(pts, lat, lon, top=MAX_CANDIDATES)
-    except Exception as e:  # noqa: BLE001
-        notes.append(f"chlorophyll hotspots failed: {type(e).__name__}: {e}")
-        return []
-    cands = [{
-        "lat": h["lat"], "lon": h["lon"], "kind": "hotspot",
-        "name": f"Chl bloom {h['chl']:.1f} mg/m³",
-        "pfz_meta": None,
-        "chl": h.get("chl"),
-        "dist_km": h.get("distance_km"),
-    } for h in hs if (h.get("distance_km") or 1e9) <= max_km]
-    return cands
-
-
 # ── B14 crowd-spread ───────────────────────────────────────────────
 
 def _gfw_cell_key(lat: float, lon: float) -> str:
@@ -172,7 +149,7 @@ def _gfw_cell_key(lat: float, lon: float) -> str:
 
 
 def _gfw_pressure(lat: float, lon: float) -> dict[str, Any] | None:
-    """REAL global-fleet pressure near the spot (last ~30 days, AIS).
+    """GFW apparent-fishing activity used as a crowd-ranking heuristic.
 
     End date is shifted back 3 days — GFW's processing pipeline lags
     real time by ~3 days, and _clamp_date_range snaps to dataset range.
@@ -300,11 +277,11 @@ def _spread(recs: list[dict[str, Any]], notes: list[str]) -> None:
                                   "burst-pause mein bhi fleet signal mila, honestly labelled")
         if press["penalty"] > 0:
             r["reasons"].append(
-                f"🚢 GFW AIS: {hours:.1f} fleet hrs nearby in 30 d "
-                f"(already fished) −{press['penalty']}")
+                f"🚢 GFW AIS: {hours:.1f} apparent-fishing hrs in the query area/30 d "
+                f"(experimental crowd penalty) −{press['penalty']}")
         else:
             r["reasons"].append(
-                f"🚢 GFW AIS: {hours:.1f} fleet hrs nearby in 30 d — uncrowded ±0")
+                f"🚢 GFW AIS: {hours:.1f} apparent-fishing hrs in the query area/30 d — no crowd penalty ±0")
 
     if gfw_fail:
         notes.append(f"GFW fleet-pressure check failed for {gfw_fail} spot(s) "
@@ -330,8 +307,7 @@ def _spread(recs: list[dict[str, Any]], notes: list[str]) -> None:
 def recommend(lat: float, lon: float, max_km: float = 120.0) -> dict[str, Any]:
     notes: list[str] = []
     cands = _pfz_candidates(lat, lon, max_km, notes)
-    cands += _hotspot_candidates(lat, lon, max_km, notes)
-    # generation cap (identical points across sources: PFZ wins — official)
+    # Every candidate must originate in official INCOIS PFZ geometry.
     seen, pool = set(), []
     for c in sorted(cands, key=lambda c: (c["kind"] != "pfz", c["dist_km"] or 1e9)):
         k = (round(c["lat"], 1), round(c["lon"], 1))
@@ -345,8 +321,9 @@ def recommend(lat: float, lon: float, max_km: float = 120.0) -> dict[str, Any]:
             "found": False,
             "from": [round(lat, 4), round(lon, 4)],
             "recommendations": [],
-            "notes": notes + ["no PFZ/hotspot candidates within max_km "
-                              f"{max_km:.0f} km — widen range or move seawards"],
+            "notes": notes + ["no official INCOIS PFZ candidate within max_km "
+                              f"{max_km:.0f} km"],
+            "ranking_status": "unavailable_without_official_pfz",
             "analyzed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
 
@@ -406,16 +383,22 @@ def recommend(lat: float, lon: float, max_km: float = 120.0) -> dict[str, Any]:
         "candidates_evaluated": len(pool),
         "spreading": True,
         "notes": notes,
+        "ranking_status": "experimental_non_authoritative",
+        "ranking_disclaimer": (
+            "Orders official INCOIS PFZ candidates only. Score is not from INCOIS, "
+            "not a catch probability, and not a safety certification."
+        ),
         "sources": {
             "pfz": "INCOIS PFZ Advisory (GeoServer WFS)",
-            "chl": "NOAA ERDDAP (land-masked grid)",
-            "weather": "Open-Meteo Marine + Forecast (per-candidate gate)",
-            "fleet": "Global Fishing Watch AIS effort (top-3 spots)",
+            "weather": "Open-Meteo Marine + Forecast (per-candidate threshold check)",
+            "fleet": "Global Fishing Watch AIS apparent-fishing effort (top-3 crowd context)",
             "community": "ORCA anonymous 24 h served-pick cells (0.25°)",
         },
-        "scoring": (f"100 base +{PFZ_BONUS} official-PFZ +{BLOOM_BONUS} bloom "
-                    "−80 danger −40 caution −0.15/NM distance "
-                    "−0-24 community-spread −0-10 GFW fleet pressure; "
-                    "score is ranking ONLY — separate safety state per card"),
+        "scoring": (
+            f"experimental ordering: 100 base −80 danger −40 caution "
+            f"−{UNKNOWN_WEATHER_PENALTY} unknown weather −0.15/NM distance "
+            "−0-24 community-spread −0-10 GFW activity pressure; official PFZ "
+            "geometry is an eligibility gate, not a bonus"
+        ),
         "analyzed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }

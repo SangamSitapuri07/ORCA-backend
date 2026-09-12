@@ -3,14 +3,14 @@
 Layers:
   official_pfz   Today's INCOIS PFZ advisory lines (GeoServer WFS, live)
   cyclone        Active JTWC cyclone positions + 34-kt wind radius (live)
-  port           Indian fishing harbours (curated gazetteer — ports don't
-                 move; coordinates from official port records)
-  eez            India mainland EEZ + territorial boundary
-                 (MarineRegions, the reference maritime-boundary database)
+  port           Indian fishing harbours from a static ORCA gazetteer;
+                 upstream coordinate citations are still pending
+  eez            India mainland EEZ from MarineRegions, the reference
+                 maritime-boundary database
 
-The restricted-zones layer from the blueprint is intentionally NOT faked:
-we only ship boundaries we can cite. The 12 NM territorial line is real
-and meaningful (different fishing rules inside it).
+The restricted-zones and 12 NM territorial layers from the blueprint are
+intentionally not invented: this endpoint only returns features it actually
+has, plus explicit errors when an upstream layer cannot be fetched.
 """
 from __future__ import annotations
 
@@ -131,7 +131,8 @@ def get_layers(
     if "cyclone" in wanted:
         try:
             data = jtwc.get_active_cyclones()
-            sources.add(jtwc.SOURCE_LABEL)
+            if data["cyclones"] or not data.get("errors"):
+                sources.add(jtwc.SOURCE_LABEL)
             for c in data["cyclones"]:
                 label = c.get("name") or c["designation"]
                 basin = c.get("basin")  # wp | io | sh
@@ -179,13 +180,17 @@ def get_layers(
             errors.append(f"JTWC: {type(e).__name__}")
 
     if "port" in wanted:
+        sources.add("ORCA static fishing-harbour gazetteer (upstream citations pending)")
         for p in PORTS:
             if bbox and not (bbox[0] <= p["lon"] <= bbox[2] and bbox[1] <= p["lat"] <= bbox[3]):
                 continue
             features.append({
                 "type": "Feature",
                 "geometry": {"type": "Point", "coordinates": [p["lon"], p["lat"]]},
-                "properties": {"layer": "port", "name": p["name"], "state": p["state"]},
+                "properties": {
+                    "layer": "port", "name": p["name"], "state": p["state"],
+                    "source": "ORCA static fishing-harbour gazetteer (upstream citations pending)",
+                },
             })
 
     if "eez" in wanted:
@@ -193,6 +198,8 @@ def get_layers(
         if feat:
             features.append(feat)
             sources.add("MarineRegions (Flanders Marine Institute)")
+        else:
+            errors.append("MarineRegions EEZ: upstream feature unavailable")
 
     return {
         "type": "FeatureCollection",

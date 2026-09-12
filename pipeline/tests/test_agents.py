@@ -16,7 +16,8 @@ def make_snap(**overrides):
         "chlorophyll_source": "NOAA ERDDAP",
         "fishing_hours": 1.0, "vessel_count": 2,
         "fleet_by_flag": {"IND": 2}, "fleet_by_gear": {"trawlers": 1, "inconclusive": 1},
-        "pfz_score": 0.68,
+        "fishing_window_start": "2026-07-12", "fishing_window_end": "2026-08-11",
+        "fishing_bbox_radius_deg": 0.5,
         "data_sources_used": ["Open-Meteo", "NOAA", "GFW"],
         "data_sources_failed": [],
     }
@@ -26,19 +27,22 @@ def make_snap(**overrides):
 
 # ── Agent 1: Ocean ──
 
-def test_ocean_optimal_sst():
-    snap = make_snap(sst_mean=27.0, sst_max=27.5, sst_min=26.5, wave_max=1.0)
-    r = ocean.analyze(snap)
-    assert r["agent"] == "ocean"
-    assert r["risk_level"] == "low"
-    types = [f["type"] for f in r["findings"]]
-    assert "sst_optimal" in types
+def test_ocean_complete_wave_forecast_below_threshold():
+    snap = make_snap(
+        sst_mean=27.0, sst_max=27.5, sst_min=26.5, wave_max=1.0,
+        wave_now_m=0.8, wave_peak_48h_m=1.0,
+    )
+    result = ocean.analyze(snap)
+    assert result["agent"] == "ocean"
+    assert result["risk_level"] == "low"
+    types = [finding["type"] for finding in result["findings"]]
+    assert "sst_observation" in types
     assert "wave_calm" in types
-    print("✅ test_ocean_optimal_sst passed")
+    print("✅ test_ocean_complete_wave_forecast_below_threshold passed")
 
 
 def test_ocean_high_waves():
-    snap = make_snap(wave_max=4.5, wave_mean=3.0)
+    snap = make_snap(wave_max=4.5, wave_mean=3.0, wave_now_m=4.1, wave_peak_48h_m=4.5)
     r = ocean.analyze(snap)
     assert r["risk_level"] == "high"
     types = [f["type"] for f in r["findings"]]
@@ -46,32 +50,32 @@ def test_ocean_high_waves():
     print("✅ test_ocean_high_waves passed")
 
 
-def test_ocean_sst_front():
-    snap = make_snap(sst_max=29.0, sst_min=26.5, sst_mean=27.75)  # swing 2.5°C
-    r = ocean.analyze(snap)
-    types = [f["type"] for f in r["findings"]]
-    assert "sst_front" in types
-    print("✅ test_ocean_sst_front passed")
+def test_ocean_sst_window_range_is_not_called_a_front():
+    snap = make_snap(sst_max=29.0, sst_min=26.5, sst_mean=27.75)
+    result = ocean.analyze(snap)
+    types = [finding["type"] for finding in result["findings"]]
+    assert "sst_window_range" in types
+    assert "sst_front" not in types
+    print("✅ test_ocean_sst_window_range_is_not_called_a_front passed")
 
 
 # ── Agent 2: Satellite ──
 
-def test_satellite_productive():
-    snap = make_snap(chlorophyll=1.2)
-    r = satellite.analyze(snap)
-    assert r["risk_level"] == "low"
-    types = [f["type"] for f in r["findings"]]
-    assert "chl_productive" in types
-    print("✅ test_satellite_productive passed")
+def test_satellite_chlorophyll_is_context_only():
+    result = satellite.analyze(make_snap(chlorophyll=1.2))
+    assert result["risk_level"] == "unknown"
+    assert result["status"] == "context_only"
+    assert any(f["type"] == "chlorophyll_observation" for f in result["findings"])
+    print("✅ test_satellite_chlorophyll_is_context_only passed")
 
 
-def test_satellite_bloom_warning():
-    snap = make_snap(chlorophyll=8.0)
-    r = satellite.analyze(snap)
-    assert r["risk_level"] == "moderate"
-    types = [f["type"] for f in r["findings"]]
-    assert "chl_bloom" in types
-    print("✅ test_satellite_bloom_warning passed")
+def test_satellite_high_chlorophyll_is_not_hab_warning():
+    result = satellite.analyze(make_snap(chlorophyll=8.0))
+    assert result["risk_level"] == "unknown"
+    blob = " ".join(f["msg"] for f in result["findings"])
+    assert "possible harmful" not in blob.lower()
+    assert "does not identify HABs" in blob
+    print("✅ test_satellite_high_chlorophyll_is_not_hab_warning passed")
 
 
 def test_satellite_no_data():
@@ -85,60 +89,69 @@ def test_satellite_no_data():
 
 # ── Agent 6: Fisheries ──
 
-def test_fisheries_highly_recommended():
-    snap = make_snap(chlorophyll=1.0, sst_mean=27.0, fishing_hours=80.0, pfz_score=0.85)
+def test_fisheries_reports_context_without_pfz_verdict():
+    snap = make_snap(chlorophyll=1.0, sst_mean=27.0, fishing_hours=80.0)
     r = fisheries.analyze(snap)
-    assert r["verdict"] == "highly_recommended"
-    assert r["risk_level"] == "low"
+    assert r["verdict"] == "unavailable"
+    assert r["risk_level"] == "unknown"
     types = [f["type"] for f in r["findings"]]
-    assert "pfz_verdict" in types
-    assert "chl_pfz_sweet_spot" in types
-    assert "sst_pelagic_optimal" in types
-    assert "high_fishing_activity" in types
-    print("✅ test_fisheries_highly_recommended passed")
+    assert "chlorophyll_observation" in types
+    assert "sst_observation" in types
+    assert "gfw_fishing_activity" in types
+    assert "official_pfz_not_evaluated" in types
+    assert "pfz_verdict" not in types
+    gfw = next(f for f in r["findings"] if f["type"] == "gfw_fishing_activity")
+    assert gfw["window_start"] == "2026-07-12"
+    assert "does not establish catch" in gfw["msg"]
+    print("✅ test_fisheries_reports_context_without_pfz_verdict passed")
 
 
-def test_fisheries_not_recommended():
-    snap = make_snap(chlorophyll=0.05, sst_mean=32.0, fishing_hours=0, pfz_score=0.1)
+def test_fisheries_never_converts_values_to_negative_recommendation():
+    snap = make_snap(chlorophyll=0.05, sst_mean=32.0, fishing_hours=0)
     r = fisheries.analyze(snap)
-    assert r["verdict"] == "not_recommended"
-    assert r["risk_level"] == "high"
-    print("✅ test_fisheries_not_recommended passed")
+    assert r["verdict"] == "unavailable"
+    assert r["risk_level"] == "unknown"
+    assert all(f["type"] != "pfz_verdict" for f in r["findings"])
+    print("✅ test_fisheries_never_converts_values_to_negative_recommendation passed")
 
 
 # ── Agent 5: Marine Ecology ──
 
-def test_ecology_upwelling():
-    snap = make_snap(chl=3.0, sst_mean=24.0)  # cold + high chl = upwelling
+def test_ecology_does_not_diagnose_upwelling_or_hab():
+    snap = make_snap(chlorophyll=8.0, sst_mean=30.0)
     r = marine_ecology.analyze(snap)
     types = [f["type"] for f in r["findings"]]
-    assert "upwelling_signature" in types
-    print("✅ test_ecology_upwelling passed")
+    assert types == ["sst_chlorophyll_coobservation", "chlorophyll_gfw_coobservation"]
+    assert r["risk_level"] == "unknown"
+    assert "does not establish upwelling" in r["findings"][0]["msg"]
+    print("✅ test_ecology_does_not_diagnose_upwelling_or_hab passed")
 
 
-def test_ecology_validated_fishing():
-    snap = make_snap(chl=1.5, sst_mean=28.0, fishing_hours=50.0)
+def test_ecology_does_not_call_activity_a_proven_fishing_ground():
+    snap = make_snap(chlorophyll=1.5, sst_mean=28.0, fishing_hours=50.0)
     r = marine_ecology.analyze(snap)
-    types = [f["type"] for f in r["findings"]]
-    assert "validated_fishing_ground" in types
-    print("✅ test_ecology_validated_fishing passed")
+    finding = next(f for f in r["findings"] if f["type"] == "chlorophyll_gfw_coobservation")
+    assert "does not prove catch" in finding["msg"]
+    assert "validated_fishing_ground" not in [f["type"] for f in r["findings"]]
+    print("✅ test_ecology_does_not_call_activity_a_proven_fishing_ground passed")
 
 
 # ── Agent 7: Marine Risk ──
 
-def test_risk_low_when_all_good():
-    snap = make_snap(wave_max=1.0)
-    agents = run_all(snap)
-    r = marine_risk.analyze(snap, agent_results=agents)
-    assert r["risk_level"] == "low"
-    print("✅ test_risk_low_when_all_good passed")
+def test_risk_low_when_complete_evidence_is_below_threshold():
+    snap = make_snap(wave_now_m=0.8, wave_peak_48h_m=1.0)
+    ocean_result = ocean.analyze(snap)
+    weather_result = {"agent": "weather", "findings": [], "risk_level": "low", "evidence": {"complete": True}}
+    result = marine_risk.analyze(snap, agent_results=[ocean_result, weather_result])
+    assert result["risk_level"] == "low"
+    print("✅ test_risk_low_when_complete_evidence_is_below_threshold passed")
 
 
 def test_risk_high_when_waves_high():
-    snap = make_snap(wave_max=4.5)
-    agents = run_all(snap)
-    r = marine_risk.analyze(snap, agent_results=agents)
-    assert r["risk_level"] in ("high", "critical")
+    snap = make_snap(wave_now_m=4.1, wave_peak_48h_m=4.5)
+    ocean_result = ocean.analyze(snap)
+    result = marine_risk.analyze(snap, agent_results=[ocean_result])
+    assert result["risk_level"] in ("high", "critical")
     print("✅ test_risk_high_when_waves_high passed")
 
 
@@ -183,7 +196,7 @@ def test_reasoner_full_pipeline():
     assert "overall_risk" in out
     assert "summary" in out
     assert "recommendation" in out
-    assert len(out["agents"]) == 9
+    assert len(out["agents"]) == 11
     agent_names = [a["agent"] for a in out["agents"]]
     assert "ocean" in agent_names
     assert "satellite" in agent_names
@@ -206,17 +219,17 @@ def test_reasoner_select_agents():
 
 
 if __name__ == "__main__":
-    test_ocean_optimal_sst()
+    test_ocean_complete_wave_forecast_below_threshold()
     test_ocean_high_waves()
-    test_ocean_sst_front()
-    test_satellite_productive()
-    test_satellite_bloom_warning()
+    test_ocean_sst_window_range_is_not_called_a_front()
+    test_satellite_chlorophyll_is_context_only()
+    test_satellite_high_chlorophyll_is_not_hab_warning()
     test_satellite_no_data()
-    test_fisheries_highly_recommended()
-    test_fisheries_not_recommended()
-    test_ecology_upwelling()
-    test_ecology_validated_fishing()
-    test_risk_low_when_all_good()
+    test_fisheries_reports_context_without_pfz_verdict()
+    test_fisheries_never_converts_values_to_negative_recommendation()
+    test_ecology_does_not_diagnose_upwelling_or_hab()
+    test_ecology_does_not_call_activity_a_proven_fishing_ground()
+    test_risk_low_when_complete_evidence_is_below_threshold()
     test_risk_high_when_waves_high()
     test_validation_clean()
     test_validation_all_failed()

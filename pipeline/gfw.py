@@ -453,6 +453,54 @@ def _quota_explanation() -> str:
     )
 
 
+def _parse_effort_report(data: dict[str, Any]) -> tuple[float, set[str], list]:
+    """Parse a current GFW v3 4Wings report without confusing ``total``
+    (the number of result groups) with fishing hours.
+
+    Grouped VESSEL_ID reports expose ``hours`` and singular ``vesselId``
+    inside a dataset-keyed list. Some older responses used a flat list and
+    plural ``vesselIDs``. Supporting both keeps the adapter compatible while
+    ensuring hours are always summed from measured entries.
+    """
+    entries = data.get("entries", data.get("data", []))
+    if not isinstance(entries, list):
+        entries = []
+    total_hours = 0.0
+    vessel_ids: set[str] = set()
+
+    def collect(item: dict) -> None:
+        nonlocal total_hours
+        for key in ("hours", "Apparent Fishing Hours"):
+            value = item.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                total_hours += float(value)
+                break
+        for key in ("vesselId", "vessel_id"):
+            value = item.get(key)
+            if isinstance(value, str) and value:
+                vessel_ids.add(value)
+        for key in ("vesselIDs", "vesselIds", "vessel_ids"):
+            value = item.get(key)
+            if isinstance(value, list):
+                vessel_ids.update(str(v) for v in value if v is not None)
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if any(key in entry for key in ("hours", "Apparent Fishing Hours", "vesselId", "vesselIDs")):
+            collect(entry)
+            continue
+        for items in entry.values():
+            if isinstance(items, list):
+                for item in items:
+                    if isinstance(item, dict):
+                        collect(item)
+            elif isinstance(items, dict):
+                collect(items)
+
+    return total_hours, vessel_ids, entries
+
+
 def get_fishing_effort(
     lat: float,
     lon: float,
@@ -565,49 +613,11 @@ def get_fishing_effort(
         data = _request_with_burst_retry(url, tok, method="POST", body=body, timeout=60)
         global _LAST_RAW
         _LAST_RAW = data  # debug self-test only — parser verification
-        # Real GFW response shape (from docs):
-        # {
-        #   "total": 497.88,
-        #   "entries": [
-        #     {
-        #       "date": "2026-05-06T00:00:00.000Z",
-        #       "vesselIDs": ["3e09e89...", ...],
-        #       "hours": 12.4
-        #     },
-        #     ...
-        #   ]
-        # }
-        # or grouped: entries: [{dataset_key: [...]}]
-        total_hours = float(data.get("total", 0) or 0)
-        entries = data.get("entries", data.get("data", []))
-        all_vessel_ids: set[str] = set()
-
-        def collect_vessels(item: dict) -> None:
-            for k in ("vesselIDs", "vesselIds", "vessel_ids", "vessel_id"):
-                v = item.get(k)
-                if isinstance(v, list):
-                    all_vessel_ids.update(str(x) for x in v)
-                elif isinstance(v, int):
-                    pass  # already a count, not IDs
-            for k in ("hours", "Apparent Fishing Hours"):
-                v = item.get(k)
-                if isinstance(v, (int, float)):
-                    nonlocal total_hours
-                    if total_hours == 0:
-                        total_hours = float(v)
-
-        for entry in entries:
-            if isinstance(entry, dict):
-                if "vesselIDs" in entry or "hours" in entry or "date" in entry:
-                    collect_vessels(entry)
-                else:
-                    for dataset_key, items in entry.items():
-                        if isinstance(items, list):
-                            for item in items:
-                                if isinstance(item, dict):
-                                    collect_vessels(item)
-                        elif isinstance(items, dict):
-                            collect_vessels(items)
+        # Current v3 response shape is dataset-keyed, for example:
+        # {"total": 1, "entries": [{"public-global-fishing-effort:v4.0":
+        #   [{"vesselId": "...", "hours": 12.4}, ...]}]}.
+        # ``total`` counts result groups; it is NOT fishing hours.
+        total_hours, all_vessel_ids, entries = _parse_effort_report(data)
 
         result = {
             "hours": total_hours,

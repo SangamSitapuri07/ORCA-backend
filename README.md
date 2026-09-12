@@ -1,83 +1,161 @@
-# ORCA Backend — SIH26176 (ISRO)
+# ORCA — Integrated Marine Safety System
 
-**Marine EcOsystem Reasoning with Collaborative Agents** — the data + intelligence
-engine. FastAPI server that fetches **only real, live ocean data** (12 sources),
-reasons over it with a 10-agent pipeline, and answers the skipper's actual
-questions: *what is it like here? is the whole route safe? when should I leave?*
+ORCA (**Marine EcOsystem Reasoning with Collaborative Agents**) is an ORCA Box-first safety system for fishers. This repository now contains one authoritative FastAPI backend, a genuine Flutter Android client, and the existing Next.js judge/rescue console.
 
-> **Honesty is the product.** No dummy data anywhere: a source that fails is
-> reported with its real reason (cloud cover, timeouts, rate limits), the
-> validation agent counts it, and the UI shows it — never invented values.
+> **Responsibility split:** Flutter APK = interface · ORCA Box = brain · Supabase = optional Phase-2 cloud memory. Safety-critical computation never depends on Supabase or an LLM.
 
-Frontend (Flutter app + Next.js dashboard) lives in the sister repo:
-**[SangamSitapuri07/SIH](https://github.com/SangamSitapuri07/SIH)** (`wwith-web` branch).
+## What is integrated
 
----
+```text
+Flutter widgets
+  → Riverpod provider → use case → repository → Dio/SSE datasource
+  → FastAPI ORCA Box
+  → provider adapters + GIS + deterministic ten-agent specialist pipeline
+  → deterministic marine-risk/advisory engine
+  → optional bounded Ollama explanations
+  → provenance-rich JSON → Flutter
 
-## Quick start
+Next.js console → same-origin /api proxy → the same FastAPI backend
+```
 
-```powershell
-pip install -r backend/requirements.txt
-pip install -r pipeline/requirements.txt
+The reasoning response contains ten deterministic specialist stages plus an eleventh orchestrator stage. Ollama can explain already-computed evidence, but cannot alter measurements, thresholds, GIS results, risk, recommendations, or the skipper advisory.
+
+### Honest capability status
+
+| Capability | Current status |
+|---|---|
+| Deterministic advisory, route checks, agent reasoning, GIS layers, alerts, SSE | Integrated |
+| Open-Meteo, NOAA, ESA, INCOIS, JTWC provider adapters | Fetch on demand; each response reports used and failed sources |
+| GFW and MOSDAC | Optional; disabled without environment credentials |
+| Ollama | Optional local explanation layer with deterministic fallback |
+| Web `/live` rescue subsystem | Included as the existing in-memory implementation |
+| RAG | **Unavailable:** authoritative teammate implementation was not supplied |
+| PostgreSQL/PostGIS | **Unavailable:** authoritative schema/repository implementation was not supplied |
+| Supabase auth/history/catch/fleet aggregation | **Unavailable:** seeded records and simulated sync were removed; core safety remains available |
+
+Unavailable components are reported by `/api/v1/health`; they are not replaced with fabricated data.
+
+## Prerequisites
+
+- Python 3.11+
+- Node.js 20.9+ and npm (Node 22 is supported)
+- Ollama only if local language explanations are wanted
+- Flutter compatible with Dart 3.11 / Flutter 3.38.4+, JDK 17, and Android SDK 36 for Android builds
+
+## 1. Start the ORCA Box backend
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate                 # Windows: .venv\Scripts\activate
+python -m pip install -r backend/requirements.txt
+python -m pip install -r pipeline/requirements.txt
+cp .env.example .env                     # optional; do not commit .env
 uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ```
 
-Optional credentials via `.env` (never committed): MOSDAC username/password,
-Global Fishing Watch token — the server runs fine without them and says so in
-`/api/v1/health`.
+Health and configuration:
 
-## What it serves
+```bash
+curl http://127.0.0.1:8000/api/v1/health
+curl http://127.0.0.1:8000/api/v1/ollama/health
+```
 
-📘 **Full guide: [docs/API-GUIDE.md](docs/API-GUIDE.md)** — har external
-API kahan se aata hai, kya fetch hota hai, live status, aur ORCA ke apne
-endpoints ka poora hisaab.
+### Backend environment variables
 
-
-| Endpoint | What it answers (real mechanism) |
+| Variable | Purpose |
 |---|---|
-| `/api/v1/health` | live status of every source, credentials, cache |
-| `/api/v1/zone` · `/grid` | point / gridded snapshot of the ocean right now |
-| `/api/v1/reason` | 10-agent collaborative analysis (risk, ecology, anomaly, validation…) |
-| `/api/v1/advisory` | bilingual skipper advisory — WMO/IMD small-craft thresholds |
-| `/api/v1/field` · `/layers` · `/tiles` | field explorer + server-rendered PNG data tiles |
-| `/api/v1/route-check` | course verified every 2 km vs the real GLOBE 1 km land mask; blocked → one REAL computed detour waypoint |
-| `/api/v1/voyage` | **voyage planner** — "TU analyze kar: kahan jaun?"
-  today's official INCOIS PFZ lines + NOAA chlorophyll hotspots, each
-  gated by live forecast at that exact spot; auditable score per card.
-  **B14 crowd-spread**: ranked spots are de-scored by (a) GFW AIS fleet
-  hours nearby (30 d, top-3 spots) and (b) ORCA's OWN anonymous
-  community picks (0.25° cells, rolling 24 h) — the served #1 is
-  remembered so the NEXT fisher is nudged to the next-best spot.
-  "Sabko same jagah nahi bhejte" — every deduction listed in reasons[] |
-| `/api/v1/route-advisory` | **transit verdict**: the verified course sampled every ~30 km, live marine forecast per point in parallel, folded worst-case → `go / caution / nogo / unknown` + safest departure window |
-| `/api/v1/alerts` · `/agents` · `/datasets` · `/zones` · `/chat` · `/feedback` | alerts feed, agent registry, provenance, LLM chat (optional), feedback |
+| `GFW_API_TOKEN` | Enables Global Fishing Watch requests |
+| `MOSDAC_USERNAME`, `MOSDAC_PASSWORD` | Enable authenticated MOSDAC ingestion |
+| `OLLAMA_ENABLED` | `auto` by default; set `0` to disable |
+| `OLLAMA_HOST` | Ollama server URL; default `http://127.0.0.1:11434` |
+| `OLLAMA_MODEL` | Installed local model; default `qwen3:8b` |
+| `OLLAMA_TIMEOUT_S` | Per-generation wall timeout |
+| `ORCA_CORS_ORIGINS` | Comma-separated browser origins |
+| `ORCA_CORS_ORIGIN_REGEX` | Optional additional browser-origin regex |
+| `ORCA_DEBUG` | `1` exposes endpoint diagnostics; keep `0` in production |
+| `ORCA_DEMO_MODE` | `1` enables the clearly labelled alert-drill endpoint; default `0` |
+| `ORCA_WARMUP` | `1` opts into network/cache warm-up; default is off |
+| `ORCA_PREWARM`, `ORCA_PREWARM_GFW_PINS` | Optional warm-up scope and GFW quota use |
 
-## Data sources (all live, all named in responses)
+## 2. Start the Next.js judge/rescue console
 
-Open-Meteo Marine + Forecast + Daily (MeteoFrance/ECMWF) · NOAA ERDDAP
-chlorophyll (today → 3-day → 7-day lag retry) · ESA OC-CCI ocean colour ·
-ISRO MOSDAC OCM-3 (real login, honest 24 s wall cap) · INCOIS LAS ·
-INCOIS PFZ daily official advisory lines · Global Fishing Watch effort +
-fleet (token, 429-retry) · JTWC cyclone warnings · GLOBE 1 km land mask
-(offline) · Nominatim search (app-side).
+```bash
+cd web
+cp .env.example .env.local
+npm ci
+npm run dev -- --hostname 0.0.0.0
+```
+
+`ORCA_BACKEND_URL` is read by the Next.js server and defaults to the local backend. Browser code uses relative `/api` requests, so no backend deployment address is embedded in the client bundle. Use `NEXT_PUBLIC_ORCA_API_URL` or `NEXT_PUBLIC_ORCA_WS_URL` only when deliberately exposing FastAPI directly.
+
+Production checks:
+
+```bash
+npm run lint
+npm run typecheck
+npm run build
+npm audit --audit-level=moderate
+```
+
+## 3. Run the Flutter Android client
+
+```bash
+cd frontend
+flutter pub get
+flutter gen-l10n
+flutter analyze
+flutter test
+flutter run --dart-define=ORCA_API_BASE_URL=https://your-orca-box.example
+```
+
+For an emulator or trusted LAN during **debug only**, inject its HTTP URL using the same `--dart-define`. Release builds target API 36, retain Android's HTTPS-only default, and are not signed with debug keys. The first-run screen also accepts an ORCA Box URL; release mode validates HTTPS.
+
+No Supabase URL or key is currently accepted because there is no authoritative Phase-2 repository/auth implementation to connect safely.
+
+## API surfaces used by the clients
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/v1/health` | Honest source/component configuration status |
+| `GET /api/v1/zone` | Provenance-rich point snapshot |
+| `GET /api/v1/advisory` | Authoritative deterministic `go/caution/no_go/unknown` verdict |
+| `GET /api/v1/reason` | Ten specialists plus orchestrator trace and optional Ollama text |
+| `GET /api/v1/layers` | PFZ, cyclone, harbour, and EEZ GeoJSON |
+| `GET /api/v1/route-check` | Three-state GLOBE land verification and computed sea legs |
+| `GET /api/v1/route-advisory` | Per-point transit evidence and safe-window result |
+| `GET /api/v1/alerts` | Active alert envelope and coordinate evaluation |
+| `POST /api/v1/alerts/simulate` | Explicit demo drill only |
+| `GET /api/live/stream` | SSE active-alert replay, pushes, and heartbeats |
+| `/api/v1/live/*` | Existing opt-in rescue/beacon subsystem used by web `/live` |
+
+A lack of live wave/wind/weather/cyclone evidence can never become a green advisory: the deterministic engine returns `unknown` with an explicit missing-evidence reason.
 
 ## Tests
 
-```powershell
-pip install pytest
-python -m pytest pipeline/tests -q     # 226 passed · +9 transit-verdict rules
+Backend offline suite:
+
+```bash
+source .venv/bin/activate
+python -m pip install pytest
+python -m compileall -q backend pipeline
+python -m pytest pipeline/tests -q
 ```
 
-## Repo map
+Basic local end-to-end smoke test after both servers are running:
 
-```
-backend/       FastAPI app + endpoints (+ its requirements.txt)
-pipeline/      data fetchers, agents, verdict engines, tests (226)
-tools/         verify/demo scripts (live-source diagnostics)
-docs/          MOSDAC guides, CHL diagnostics, research,
-               API-GUIDE.md, VOYAGE-PLANNER.md (research & design)
-RUNBOOK.md     full-stack run guide (sister repo has the frontends)
-start-backend.ps1
+```bash
+curl -f http://127.0.0.1:8000/api/v1/health
+curl -f 'http://127.0.0.1:8000/api/v1/layers?types=port'
+curl -f http://127.0.0.1:3000/api/v1/health   # Next.js same-origin proxy
+curl -f http://127.0.0.1:3000/live
 ```
 
-*Built for Smart India Hackathon 2026 · Problem Statement SIH26176 (ISRO).*
+Provider tests marked live/network-dependent are intentionally opt-in; provider failures must appear in response provenance rather than being converted into values. See `docs/API-GUIDE.md`, `docs/SYSTEM_DESIGN.md`, and `RUNBOOK.md` for deeper endpoint and operational notes.
+
+## Security and data rules
+
+- Never commit `.env`, provider tokens, credentials, signing keys, or deployment addresses.
+- Keep `ORCA_DEBUG=0` in production; stack traces remain in ORCA Box logs.
+- OSM is visibly attributed and used as a general base map, not an official nautical chart.
+- Cached observations retain original timestamps and staleness. Missing values stay null.
+- RAG context, when implemented later, must remain distinct from live scientific observations.

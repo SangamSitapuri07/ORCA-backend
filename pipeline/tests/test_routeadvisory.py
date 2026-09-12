@@ -67,6 +67,12 @@ def test_danger_from_now_wave_and_gale_gust():
     assert "gale" in row["why"]
 
 
+def test_low_wave_with_missing_wind_is_unknown_not_good():
+    state, row = _point_state(_pf(wind48=None, gust48=None))
+    assert state == "unknown"
+    assert "wind" in row["note"] and "gusts" in row["note"]
+
+
 def test_strong_current_attaches_honest_note_not_state():
     state, row = _point_state(_pf(current=3.4))
     assert state == "good" and "current" in row["note"]
@@ -81,6 +87,8 @@ def test_reduce_matrix():
     # a failed point is a reason for caution, never silently 'go'
     assert _reduce_verdict(["good", "unknown"], True)["level"] == "caution"
     assert _reduce_verdict(["unknown", "unknown"], None)["level"] == "unknown"
+    assert _reduce_verdict(["unknown", "unknown"], True)["level"] == "unknown"
+    assert _reduce_verdict(["good", "good"], None)["level"] == "caution"
     # land blocked beats everything
     assert _reduce_verdict(["good", "good"], False)["level"] == "nogo"
 

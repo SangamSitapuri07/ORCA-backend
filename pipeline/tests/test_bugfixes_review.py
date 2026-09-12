@@ -13,156 +13,47 @@ from __future__ import annotations
 from pipeline.agents import marine_risk, satellite, weather
 
 
-# ── Bug #3: satellite tag must follow the PRIMARY measurement ─────────
+# ── Satellite observations must not become ecological/catch verdicts ──
 
-def test_satellite_low_chl_without_crosscheck_is_low_not_unknown():
-    """chl present (NOAA) but OC-CCI cloud-masked → 'low', NOT 'unknown'."""
+def test_satellite_chlorophyll_is_context_not_risk():
     snap = {
-        "chlorophyll": 0.21,
-        "chlorophyll_source": "NOAA ERDDAP",
-        "chlorophyll_unit": "mg/m^3",
-        # note: no chlorophyll_occci key → cross-check absent
+        "chlorophyll": 6.5, "chlorophyll_source": "NOAA",
+        "chlorophyll_unit": "mg/m^3", "chlorophyll_date": "2026-09-01",
+        "fetched_at": "2026-09-04T12:00:00Z",
     }
-    res = satellite.analyze(snap)
-    assert res["risk_level"] == "low", res
-    # And the honesty note about the missing cross-check must be visible
-    types = [f["type"] for f in res["findings"]]
-    assert "chl_cross_check_missing" in types
+    result = satellite.analyze(snap)
+    assert result["risk_level"] == "unknown"
+    assert result["status"] == "context_only"
+    finding = next(f for f in result["findings"] if f["type"] == "chlorophyll_observation")
+    assert finding["source"] == "NOAA"
+    assert finding["observed_for"] == "2026-09-01"
+    assert "does not identify HABs" in finding["msg"]
 
 
-def test_satellite_absent_chl_still_unknown():
-    """Genuinely no chlorophyll at all → 'unknown' (that IS no data)."""
-    res = satellite.analyze({"chlorophyll": None})
-    assert res["risk_level"] == "unknown"
+def test_satellite_absent_chlorophyll_is_unknown():
+    result = satellite.analyze({"chlorophyll": None})
+    assert result["risk_level"] == "unknown"
+    assert result["status"] == "unavailable"
 
 
-def test_satellite_bloom_still_moderate():
-    snap = {"chlorophyll": 6.5, "chlorophyll_source": "NOAA", "chlorophyll_unit": "mg/m^3"}
-    assert satellite.analyze(snap)["risk_level"] == "moderate"
-
-
-# ── Review round-5: large MOSDAC gaps must not hide behind the bloom story ──
-
-def test_satellite_mosdac_large_gap_flags_outlier_not_blanket_bloom():
-    """8.5x gap with NOAA+OC-CCI agreeing → OCM-3 named the outlier, value
-    NOT counted as confirmation, pixel forensics point at the lone hot
-    pixel. Blanket 'treat the fine structure as real' text is gone."""
+def test_satellite_comparisons_report_difference_without_guessing_cause():
     snap = {
-        "chlorophyll": 0.35, "chlorophyll_source": "NOAA", "chlorophyll_unit": "mg/m^3",
-        "chlorophyll_date": "2026-09-01",
-        "chlorophyll_occci": 0.26,                     # agrees with primary (1.3x)
-        "chlorophyll_mosdac": 2.94,                    # 8.4x off
+        "chlorophyll": 0.35, "chlorophyll_source": "NOAA",
+        "chlorophyll_unit": "mg/m^3", "chlorophyll_date": "2026-09-01",
+        "chlorophyll_occci": 0.26, "chlorophyll_occci_source": "ESA OC-CCI",
+        "chlorophyll_mosdac": 2.94, "chlorophyll_mosdac_source": "ISRO MOSDAC OCM-3",
         "chlorophyll_mosdac_date": "2026-09-03",
         "chlorophyll_mosdac_pixel_km": 0.4,
         "chlorophyll_mosdac_ring_valid": 120,
-        "chlorophyll_mosdac_ring_median": 0.41,        # neighbourhood sides with primary
+        "chlorophyll_mosdac_ring_median": 0.41,
     }
-    res = satellite.analyze(snap)
-    out = [f for f in res["findings"] if f["type"] == "chl_mosdac_check_outlier"]
-    assert out, [f["type"] for f in res["findings"]]
-    msg = out[0]["msg"]
-    assert "outlier" in msg
-    assert "HOT pixel" in msg                        # forensics: one bad pixel
-    assert "Different dates" in msg                  # 09-01 vs 09-03 noted
-    assert "NOT counted as an independent confirmation" in msg
-    blob = " ".join(f["msg"] for f in res["findings"])
-    assert "treat the fine structure as real" not in blob  # old blanket text removed
-
-
-def test_satellite_mosdac_moderate_gap_keeps_resolution_story():
-    """3–5x gap: finer-resolution explanation stays, but labeled UNRESOLVED."""
-    snap = {
-        "chlorophyll": 0.35, "chlorophyll_source": "NOAA",
-        "chlorophyll_occci": 0.26,
-        "chlorophyll_mosdac": 1.4,                     # exactly 4.0x
-        "chlorophyll_mosdac_date": "2026-09-03",
-    }
-    res = satellite.analyze(snap)
-    d = [f for f in res["findings"] if f["type"] == "chl_mosdac_check_disagree"]
-    assert d, [f["type"] for f in res["findings"]]
-    assert "1 km" in d[0]["msg"] and "UNRESOLVED" in d[0]["msg"]
-
-
-def test_satellite_mosdac_large_gap_real_patch_detected():
-    """Same 8x gap, but the granule's own neighbourhood is high too →
-    forensics say 'real local patch' (not one bad pixel) — yet still an
-    outlier finding that asks for verification."""
-    snap = {
-        "chlorophyll": 0.35, "chlorophyll_source": "NOAA",
-        "chlorophyll_occci": 0.26,
-        "chlorophyll_mosdac": 2.94, "chlorophyll_mosdac_date": "2026-09-03",
-        "chlorophyll_mosdac_ring_valid": 120,
-        "chlorophyll_mosdac_ring_median": 2.6,         # whole patch high
-    }
-    res = satellite.analyze(snap)
-    out = [f for f in res["findings"] if f["type"] == "chl_mosdac_check_outlier"]
-    assert out, [f["type"] for f in res["findings"]]
-    assert "real local patch" in out[0]["msg"]
-    assert "mosdac.gov.in" in out[0]["msg"]
-
-
-def test_satellite_mosdac_uniform_area_rules_out_fine_structure():
-    """The 10.12N/80.62E case: ring high AND wider area uniformly high →
-    NOT fine structure; granule-level offset named as likelier."""
-    snap = {
-        "chlorophyll": 0.35, "chlorophyll_source": "NOAA",
-        "chlorophyll_occci": 0.26,
-        "chlorophyll_mosdac": 3.0, "chlorophyll_mosdac_date": "2026-09-03",
-        "chlorophyll_mosdac_ring_valid": 289, "chlorophyll_mosdac_ring_median": 3.0,
-        "chlorophyll_mosdac_area_median": 3.0,
-    }
-    msg = [f["msg"] for f in satellite.analyze(snap)["findings"]
-           if f["type"] == "chl_mosdac_check_outlier"][0]
-    assert "rules OUT fine coastal structure" in msg
-    assert "granule-level offset" in msg
-
-
-def test_satellite_mosdac_sharp_patch_area_normal_is_genuine_structure():
-    """Ring high but wider area normal → fine structure is GENUINELY
-    plausible (the only case where the resolution story survives)."""
-    snap = {
-        "chlorophyll": 0.35, "chlorophyll_source": "NOAA",
-        "chlorophyll_occci": 0.26,
-        "chlorophyll_mosdac": 2.9, "chlorophyll_mosdac_date": "2026-09-03",
-        "chlorophyll_mosdac_ring_valid": 289, "chlorophyll_mosdac_ring_median": 2.6,
-        "chlorophyll_mosdac_area_median": 0.40,
-    }
-    msg = [f["msg"] for f in satellite.analyze(snap)["findings"]
-           if f["type"] == "chl_mosdac_check_outlier"][0]
-    assert "wider ~80-pixel area reads normal" in msg
-    assert "small sharp patch" in msg
-
-
-def test_satellite_mosdac_cdom_case2_note():
-    """CDOM readout at the pixel is surfaced as case-2 water evidence."""
-    snap = {
-        "chlorophyll": 0.35, "chlorophyll_source": "NOAA",
-        "chlorophyll_mosdac": 3.0, "chlorophyll_mosdac_date": "2026-09-03",
-        "chlorophyll_mosdac_ring_valid": 289, "chlorophyll_mosdac_ring_median": 2.8,
-        "chlorophyll_mosdac_cdom_value": 0.42, "chlorophyll_mosdac_cdom_units": "m^-1",
-    }
-    msg = [f["msg"] for f in satellite.analyze(snap)["findings"]
-           if f["type"] == "chl_mosdac_check_outlier"][0]
-    assert "CDOM=0.42 m^-1" in msg and "Case-2" in msg
-
-
-def test_satellite_mosdac_low_cdom_rules_out_turbidity_story():
-    """The actual 10.12N/80.62E evidence: CDOM 0.0048 1/m = clear Case-1
-    water, so the finding must say turbidity CANNOT explain the gap —
-    not repeat the case-2 line uncritically."""
-    snap = {
-        "chlorophyll": 0.35, "chlorophyll_source": "NOAA",
-        "chlorophyll_occci": 0.26,
-        "chlorophyll_mosdac": 3.0, "chlorophyll_mosdac_date": "2026-09-03",
-        "chlorophyll_mosdac_ring_valid": 289, "chlorophyll_mosdac_ring_median": 3.0,
-        "chlorophyll_mosdac_area_median": 2.5,
-        "chlorophyll_mosdac_cdom_value": 0.0048, "chlorophyll_mosdac_cdom_units": "1/m",
-    }
-    msg = [f["msg"] for f in satellite.analyze(snap)["findings"]
-           if f["type"] == "chl_mosdac_check_outlier"][0]
-    assert "CDOM=0.0048 1/m" in msg
-    assert "Case-1" in msg and "cannot explain the gap" in msg
-    assert "Case-2" not in msg
+    result = satellite.analyze(snap)
+    occci = next(f for f in result["findings"] if f["type"] == "chlorophyll_occci_comparison")
+    mosdac = next(f for f in result["findings"] if f["type"] == "chlorophyll_mosdac_comparison")
+    assert occci["comparison_status"] == "within_internal_display_band"
+    assert mosdac["comparison_status"] == "large_difference"
+    assert mosdac["value"]["mosdac_ring_median"] == 0.41
+    assert "No bloom, bias, cloud, or confirmation cause is inferred" in mosdac["msg"]
 
 
 # ── Bug #2: marine risk must ESCALATE on the warning it quotes ────────
@@ -185,12 +76,49 @@ def test_marine_risk_escalates_on_wave_caution():
     assert res["risk_score"] >= 2
 
 
-def test_marine_risk_calm_stays_low():
+def test_marine_risk_complete_below_threshold_evidence_is_low():
     ocean = {"agent": "ocean", "findings": [{
-        "type": "wave_calm", "severity": "good", "value": 0.8, "msg": "calm"}],
-        "summary": "calm", "risk_level": "low"}
-    res = marine_risk.analyze({}, agent_results=[ocean])
-    assert res["risk_level"] == "low"
+        "type": "wave_calm", "severity": "good", "value": 0.8, "msg": "below threshold"}],
+        "summary": "below threshold", "risk_level": "low", "evidence": {"complete": True}}
+    weather_result = {
+        "agent": "weather", "findings": [], "summary": "below threshold",
+        "risk_level": "low", "evidence": {"complete": True},
+    }
+    result = marine_risk.analyze({}, agent_results=[ocean, weather_result])
+    assert result["risk_level"] == "low"
+    assert result["evidence_complete"] is True
+
+
+def test_reasoner_does_not_treat_gis_context_as_low_sea_risk(monkeypatch):
+    from pipeline import reasoner
+
+    traces = [
+        {"agent": "validation", "risk_level": "high", "summary": "sources missing", "findings": []},
+        {"agent": "gis", "risk_level": "low", "summary": "nearest port mapped", "findings": []},
+        {"agent": "ocean", "risk_level": "unknown", "summary": "no ocean", "findings": []},
+        {"agent": "marine_risk", "risk_level": "unknown", "summary": "risk unknown", "findings": []},
+    ]
+    monkeypatch.setattr(reasoner, "run_all", lambda *a, **k: traces)
+    monkeypatch.setattr(reasoner, "enrich_agents", lambda agents: agents)
+    monkeypatch.setattr(reasoner, "orchestrator_trace", lambda agents, **k: {
+        "agent": "orca_reasoning", "agent_id": "orchestrator", "risk_level": k["overall_risk"],
+        "summary": k["summary"], "llm_invoked": False, "llm_model": "none", "llm_interpretation": None,
+    })
+    result = reasoner.reason({"lat": 1.0, "lon": 2.0, "data_sources_used": [], "data_sources_failed": ["offline"]})
+    assert result["overall_risk"] == "unknown"
+    assert result["verdict"] == "unknown"
+    assert "does not issue GO" in result["recommendation"]
+
+
+def test_marine_risk_missing_physical_data_is_unknown_not_hazard_or_low():
+    validation = {"agent": "validation", "risk_level": "high", "findings": [{
+        "type": "all_sources_failed", "severity": "error", "value": None,
+        "msg": "No providers responded.",
+    }]}
+    res = marine_risk.analyze({}, agent_results=[validation])
+    assert res["risk_level"] == "unknown"
+    assert res["risk_score"] == 0
+    assert any(f["type"] == "safety_data_unavailable" for f in res["findings"])
 
 
 def test_marine_risk_sees_gale_gusts():
@@ -329,12 +257,13 @@ def test_ocean_uses_48h_peak_and_labels_both_numbers():
     assert res["risk_level"] == "low"
 
 
-def test_ocean_without_forecast_labels_window_max_honestly():
+def test_ocean_without_forecast_keeps_history_context_only():
     from pipeline.agents import ocean
-    res = ocean.analyze({"sst_mean": 28.0, "wave_max": 3.1})
-    w = next(f for f in res["findings"] if f["type"] == "wave_caution")
-    assert "past ~30 days" in w["msg"]
-    assert res["risk_level"] == "moderate"
+    result = ocean.analyze({"sst_mean": 28.0, "wave_max": 3.1})
+    finding = next(f for f in result["findings"] if f["type"] == "wave_recent_window")
+    assert "short-term forecast is unavailable" in finding["msg"]
+    assert finding["severity"] == "info"
+    assert result["risk_level"] == "unknown"
 
 
 def test_marine_risk_escalates_on_fresh_breeze():
@@ -488,7 +417,8 @@ def test_weather_all_info_day_is_low_not_no_data(monkeypatch, ):
     assert "WMO 80" in cond_f["msg"] and "dominant" in cond_f["msg"]
 
 
-def test_ocean_all_info_day_is_low_not_unknown():
+def test_ocean_sst_alone_is_context_not_low_safety():
     from pipeline.agents import ocean
-    res = ocean.analyze({"sst_mean": 25.0})  # acceptable → info only
-    assert res["risk_level"] == "low"
+    result = ocean.analyze({"sst_mean": 25.0})
+    assert result["risk_level"] == "unknown"
+    assert result["findings"][0]["type"] == "sst_observation"

@@ -5,7 +5,7 @@ Generates the final explainable marine ecosystem insight.
 
 This is the "brain" of ORCA. It:
   1. Receives a ZoneSnapshot
-  2. Runs all 6 implemented agents in dependency order
+  2. Runs ten specialized agents in dependency order
   3. Aggregates risks (max of all agent risks)
   4. Synthesizes a final answer with source attribution
   5. Returns explainable text + structured findings
@@ -18,7 +18,7 @@ Usage:
     insight = reason(snap)
     # Returns: {
     #   "zone": {...snapshot...},
-    #   "agents": [<6 agent results>],
+    #   "agents": [<ten specialist results + orchestrator>],
     #   "overall_risk": "low" | "moderate" | "high" | "critical",
     #   "summary": "Human-readable explanation",
     #   "recommendation": "Should a fisherman go out today?",
@@ -29,6 +29,7 @@ from __future__ import annotations
 from typing import Any
 
 from pipeline.agents import run_all
+from pipeline.llm_enrichment import enrich_agents, orchestrator_trace
 
 
 RISK_ORDER = {"low": 0, "unknown": 1, "moderate": 2, "high": 3, "critical": 4}
@@ -37,7 +38,7 @@ RISK_ORDER = {"low": 0, "unknown": 1, "moderate": 2, "high": 3, "critical": 4}
 # dangerous the sea is. Mixing its "moderate" (some sources failed) into
 # the environmental risk made the UI scream MODERATE on a calm sea
 # whenever a remote source timed out — wrong message to a fisherman.
-META_AGENTS = {"validation"}
+META_AGENTS = {"validation", "gis", "map_synoptic"}
 
 
 def _max_risk(risks: list[str]) -> str:
@@ -55,7 +56,7 @@ def reason(
     Returns a dict with all agent results, an aggregated risk level,
     a human-readable summary, and an actionable recommendation.
     """
-    agents = run_all(snap, include=include_agents)
+    agents = enrich_agents(run_all(snap, include=include_agents))
 
     # Aggregate risks — from agents that actually measured the sea.
     # "unknown" (input data missing) is NOT a risk level: a calm sea with
@@ -77,23 +78,15 @@ def reason(
 
     # Get key agent signals
     sat = next((a for a in agents if a["agent"] == "satellite"), {})
-    fish = next((a for a in agents if a["agent"] == "fisheries"), {})
     ocean = next((a for a in agents if a["agent"] == "ocean"), {})
     eco = next((a for a in agents if a["agent"] == "marine_ecology"), {})
     risk_agent = next((a for a in agents if a["agent"] == "marine_risk"), {})
 
     # Build summary
     parts = []
-    if fish.get("verdict") in ("highly_recommended", "recommended"):
-        parts.append(f"🟢 PFZ verdict: {fish['verdict'].replace('_', ' ').title()}")
-    elif fish.get("verdict") == "not_recommended":
-        parts.append(f"🔴 PFZ verdict: Not recommended")
-    elif fish.get("verdict") == "neutral":
-        parts.append(f"🟡 PFZ verdict: Neutral")
-
-    if "pfz_score" in snap and snap["pfz_score"] is not None:
-        parts.append(f"Composite PFZ score: {snap['pfz_score']:.2f}/1.0")
-
+    # PFZ/catch suitability is intentionally absent: this analytical snapshot
+    # does not include an official INCOIS PFZ advisory, and ORCA no longer
+    # manufactures a score from generic SST/chlorophyll/AIS observations.
     if risk_agent.get("summary"):
         # Label it: this is the vessel-safety AGENT's verdict. The big
         # banner above is the OVERALL (max across all agents). Unlabeled,
@@ -108,28 +101,46 @@ def reason(
 
     summary = " | ".join(parts) if parts else "Insufficient data for recommendation."
 
-    # Recommendation
-    if overall == "critical":
-        rec = "🛑 STAY ON LAND. Critical marine conditions. No fishing recommended."
-    elif overall == "high":
-        rec = "⚠️ HIGH RISK. Only experienced crew with appropriate vessels should consider limited activity close to shore."
-    elif overall == "moderate":
-        rec = "🟡 MODERATE. Conditions are workable but watch for changing weather."
-    elif overall == "low":
-        if fish.get("verdict") in ("highly_recommended", "recommended"):
-            rec = "✅ GOOD CONDITIONS. Suitable for fishing; chlorophyll and SST favorable."
-        else:
-            rec = "✅ Conditions OK but no strong fishing signal — try known grounds."
+    # This endpoint is an analytical trace, not the skipper-verdict endpoint.
+    # Known wave/weather hazards may be surfaced, but LOW is never converted to
+    # GO here because cyclone completeness and the full advisory evidence gate
+    # belong to /api/v1/advisory.
+    safety_risk = risk_agent.get("risk_level", "unknown")
+    if safety_risk in ("critical", "high"):
+        rec = "🛑 A wave/weather hazard crossed an ORCA threshold. Use the skipper advisory and official IMD/INCOIS bulletins before departure."
+    elif safety_risk == "moderate":
+        rec = "🟡 A wave/weather caution threshold was crossed. Use /api/v1/advisory for the complete skipper verdict."
     else:
-        rec = "❓ Insufficient live data for a clear call — the sea itself may be fine, we just can't see it right now. Check sources below."
+        rec = "❓ This analytical trace does not issue GO. Use /api/v1/advisory, which requires complete wave, wind, gust, weather, and cyclone evidence."
 
     # Honest confidence note: risk came only from agents with real inputs.
     if limited and overall != "unknown":
         rec += (
-            f" (Confidence: {data_coverage['known']}/{data_coverage['total']} "
-            f"agents had live data — {data_coverage['sources_failed']} source(s) unreachable.)"
+            f" (Coverage: {data_coverage['known']}/{data_coverage['total']} "
+            f"analytical agents had a known status; {data_coverage['sources_failed']} source failure(s).)"
         )
 
+    # Backend-owned precaution signal. This endpoint never emits GO; only the
+    # deterministic advisory endpoint has the complete evidence/cyclone gate.
+    verdict = {
+        "moderate": "caution",
+        "high": "no_go",
+        "critical": "no_go",
+    }.get(safety_risk, "unknown")
+
+    trace = None
+    requested = set(include_agents or [])
+    if include_agents is None or requested.intersection({"orchestrator", "orca_reasoning"}):
+        trace = orchestrator_trace(
+            agents,
+            overall_risk=overall,
+            summary=summary,
+            recommendation=rec,
+            fetched_at=snap.get("fetched_at"),
+        )
+        agents.append(trace)
+
+    llm_used = bool(trace and trace.get("llm_invoked"))
     return {
         "zone": {
             "lat": snap.get("lat"),
@@ -138,9 +149,28 @@ def reason(
         },
         "agents": agents,
         "overall_risk": overall,
+        "overall_risk_scope": "cross-agent analytical context; not the skipper safety verdict",
+        "safety_signal": safety_risk,
+        "verdict": verdict,
+        "verdict_authority": "/api/v1/advisory",
         "summary": summary,
         "recommendation": rec,
-        "data_coverage": data_coverage,
+        "orchestrator_synthesis": {
+            "headline": summary,
+            "recommendation": rec,
+            "trace_owner": (
+                f"Ollama {trace.get('llm_model')} + deterministic reasoner"
+                if llm_used else "Deterministic reasoner (Ollama unavailable or disabled)"
+            ),
+            "timestamp": snap.get("fetched_at"),
+            "llm_interpretation": trace.get("llm_interpretation") if trace else None,
+            "rag_invoked": False,
+            "context_source": "live agent findings only",
+        },
+        "data_coverage": {
+            **data_coverage,
+            "failed_sources": snap.get("data_sources_failed", []),
+        },
         "data_sources_used": snap.get("data_sources_used", []),
         "data_sources_failed": snap.get("data_sources_failed", []),
         "fetched_at": snap.get("fetched_at"),

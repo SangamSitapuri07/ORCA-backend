@@ -67,17 +67,23 @@ def _mk_alert(
 
 # ── Live evaluation ────────────────────────────────────────────────
 
-def evaluate(lat: float, lon: float) -> list[dict[str, Any]]:
-    """Check REAL conditions at this point and mint alerts for anything
-    that crosses a threshold. Returns [] when everything is calm — that
-    is itself a true statement, not a placeholder."""
+def evaluate_status(lat: float, lon: float) -> dict[str, Any]:
+    """Evaluate real conditions and report both alerts and source status.
+
+    An empty alert list is an all-clear only when providers were actually
+    reached. Provider failures are returned explicitly so callers never turn
+    "could not check" into a green safety statement.
+    """
     new_alerts: list[dict[str, Any]] = []
+    sources_used: list[str] = []
+    sources_failed: list[str] = []
 
     # -- Sea state + weather (next 24 h) --
     try:
         point_fc = fc.get_point_forecast(lat, lon)
         n24 = point_fc.get("next24h", {})
         src = point_fc.get("source", "Open-Meteo")
+        sources_used.append(str(src))
 
         w = n24.get("wave_max_m")
         if w is not None:
@@ -124,8 +130,8 @@ def evaluate(lat: float, lon: float) -> list[dict[str, Any]]:
                 f"~{rain:.0f} mm rain in 24 h crosses the IMD heavy-rain threshold "
                 "(≥ 64.5 mm). Poor visibility at sea.",
                 lat, lon, 24, src))
-    except Exception:  # noqa: BLE001
-        pass  # forecast unreachable → we simply issue no weather alerts (honest)
+    except Exception as exc:  # noqa: BLE001
+        sources_failed.append(f"Open-Meteo forecast: {type(exc).__name__}: {exc}")
 
     # -- Tropical cyclones (JTWC) --
     try:
@@ -134,6 +140,11 @@ def evaluate(lat: float, lon: float) -> list[dict[str, Any]]:
         # Indian Ocean; "sh" = South Indian/Pacific (relevant south of
         # the equator); distance gates below still apply.
         cyc = jtwc.nearest_cyclone(lat, lon, basins=["io", "sh"])
+        if cyc.get("checked"):
+            sources_used.append(str(cyc.get("source", "JTWC")))
+        else:
+            errors = cyc.get("errors") or [cyc.get("note", "JTWC check unavailable")]
+            sources_failed.extend(f"JTWC: {error}" for error in errors)
         if cyc.get("found"):
             c = cyc["cyclone"]
             d = cyc["distance_km"]
@@ -155,12 +166,22 @@ def evaluate(lat: float, lon: float) -> list[dict[str, Any]]:
                     f"(JTWC advisory #{c.get('advisory_no', '?')}). Monitor bulletins.",
                     lat, lon, hrs, c.get("source", "JTWC"),
                     extra={"cyclone": c, "distance_km": d}))
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        sources_failed.append(f"JTWC: {type(exc).__name__}: {exc}")
 
     _store.extend(new_alerts)
     _prune()
-    return new_alerts
+    return {
+        "alerts": new_alerts,
+        "sources_used": list(dict.fromkeys(sources_used)),
+        "sources_failed": list(dict.fromkeys(sources_failed)),
+        "checked_at": _now().isoformat(timespec="seconds"),
+    }
+
+
+def evaluate(lat: float, lon: float) -> list[dict[str, Any]]:
+    """Backward-compatible list-only interface used by chat and tests."""
+    return evaluate_status(lat, lon)["alerts"]
 
 
 # ── Simulation (demo lever — honestly labelled) ────────────────────

@@ -1,7 +1,8 @@
 # ORCA — Real Build Plan (wwith-web branch)
 
-> **This document is the single source of truth for what we're building.**
-> We update it after every milestone so we never lose the thread.
+> **Historical planning record — not a current integration/status report.**
+> See `docs/API-GUIDE.md` for the measured 2026-09-12 provider and endpoint
+> audit, and `docs/SYSTEM_DESIGN.md` for the Phase-1 target architecture.
 
 ## Problem
 
@@ -16,9 +17,9 @@ Idea submission deadline: **20 September 2026**
 
 | Source | Type | Access |
 | --- | --- | --- |
-| **MOSDAC** (ISRO) | Satellite Earth observation files (OCEANSAT-3 OCM, SSTM, OSCAT, etc.) | ✅ Account approved, credentials in `MOSDAC_USERNAME` / `MOSDAC_PASSWORD` env vars |
-| **INCOIS** | Operational ocean advisories (PFZ, high-wave, tsunami, tide) | ⏳ To be set up (public web + API) |
-| **Open-Meteo** | Free weather + marine forecast, no key | ✅ Already integrated in prototype |
+| **MOSDAC** (ISRO) | Optional OCM-3 source comparison | Adapter wired; credentials are absent in the audited runtime |
+| **INCOIS** | PFZ geometry and conditional LAS chlorophyll backup | Adapters wired; forced 2026-09-12 calls failed in this runtime |
+| **Open-Meteo** | Weather, marine forecast, and bounded historical context | Adapters wired; forced 2026-09-12 calls failed in this runtime |
 
 ## What we already built (kept in `mvp-prototype` branch)
 
@@ -55,18 +56,19 @@ Idea submission deadline: **20 September 2026**
 - [x] `pipeline/mosdac_auth.py` + `pipeline/parser.py` — MOSDAC OCM-3/SCT L4 ready (T3 grab, 8 files on disk)
 - [x] 95+ unit tests passing
 
-### Milestone 2 — 10-agent reasoning system ✅ DONE
+### Milestone 2 — historical ten-component plan; superseded by 11-stage registry
 - [x] `pipeline/agents/ocean.py` — SST + wave analysis (Agent 1)
 - [x] `pipeline/agents/satellite.py` — chlorophyll interpretation (Agent 2)
 - [x] `pipeline/agents/weather.py` — IMD-style via Open-Meteo (Agent 3)
-- [x] `pipeline/agents/gis.py` — Indian EEZ + ports + MPAs (Agent 4)
+- [x] `pipeline/agents/gis.py` — local GLOBE land/water context; legal EEZ/MPA evidence unavailable (Agent 4)
 - [x] `pipeline/agents/marine_ecology.py` — cross-cutting patterns (Agent 5)
-- [x] `pipeline/agents/fisheries.py` — PFZ composite verdict (Agent 6)
+- [x] `pipeline/agents/fisheries.py` — provenance-labelled fisheries context; no synthetic PFZ verdict (Agent 6)
 - [x] `pipeline/agents/marine_risk.py` — vessel safety risk level (Agent 7)
-- [x] `pipeline/agents/anomaly.py` — vs ERA5 baseline (Agent 8)
+- [x] `pipeline/agents/anomaly.py` — provisional prior-year date-window SST comparison (Agent 8)
 - [x] `pipeline/agents/validation.py` — data quality checks (Agent 9)
-- [x] `pipeline/reasoner.py` — orchestrator + final insight (Agent 10)
-- [x] All 10 agents verified live in dashboard (Chennai offshore test)
+- [x] `pipeline/agents/map_synoptic.py` — provenance-labelled available overlays (Agent 10)
+- [x] `pipeline/reasoner.py` — deterministic orchestrator with optional Ollama explanation (Agent 11)
+- [x] All 11 stages execute locally; this does **not** mean every remote provider returned data
 
 ### Milestone 3 — FastAPI backend ✅ DONE
 - [x] `backend/main.py` with 7 endpoints (root, health, datasets, zones, zone, grid, reason)
@@ -99,7 +101,7 @@ Idea submission deadline: **20 September 2026**
   - `GET /api/v1/grid?min_lat=&max_lat=&min_lon=&max_lon=&step=` → grid of ZoneSnapshots
   - `GET /api/v1/zone/reason?query=` → multi-agent reasoning
 - [ ] CORS for Next.js dev server
-- [ ] Reuse the 10 agents (ocean, satellite, weather, gis, fisheries, marine_ecology, marine_risk, anomaly, validation + ORCA reasoning) — all implemented in `pipeline/agents/`
+- [x] Use the current 11-stage registry exposed by `/api/v1/agents`; see `docs/API-GUIDE.md` for exact roles and availability
 - [ ] `/datasets` endpoint showing what data was used per answer
 
 ### Milestone 4 — Next.js web app (week 4–6)

@@ -1,7 +1,9 @@
 """Deterministic safety advisory — the "Can I go out today?" card.
 
-NO LLM. Every number comes from a live data source, every rule is a
-published small-craft threshold, every verdict traceable to its reason.
+NO LLM. Every available number comes from a named provider response and every
+verdict rule is traceable. Wave/wind/rain cutoffs are ORCA Phase-1 policy
+thresholds; they are not a vessel-specific certification or a substitute for
+IMD/INCOIS bulletins and the skipper's judgement.
 
 Data woven together for one lat/lon:
   1. zone_snapshot        (SST, chlorophyll — existing ORCA pipeline)
@@ -10,17 +12,21 @@ Data woven together for one lat/lon:
   4. JTWC cyclones        (active tropical systems, distance)
 
 Verdicts:
-  go       → no reason at caution level or higher
+  go       → minimum wave/wind/weather/cyclone evidence is available and no
+             reason is at caution level or higher
   caution  → at least one caution-level reason, no no-go reason
   no_go    → at least one no-go reason
+  unknown  → minimum safety evidence is unavailable (never converted to GO)
 
-Rules (small-craft practice, WMO/IMD conventions):
+Configured Phase-1 rules (WMO weather codes and 34 kn gale terminology;
+other operational cutoffs are ORCA policy and require field validation):
   no_go    active cyclone within 300 km, or gale-force gusts ≥ 34 kn
            (WMO gale warning), or waves ≥ 4 m, or ≥ 64.5 mm rain day
            (IMD "heavy rain" threshold)
   caution  cyclone 300–800 km, winds 20–34 kn, gusts 28–34 kn,
            waves 2.5–4 m, swell ≥ 2.5 m, rain 35–64.5 mm day
-  info     bloom-level chlorophyll (> 8 mg/m³) health note; PFZ context
+  context  chlorophyll is displayed with source/time but never used as a HAB,
+           catch, or vessel-safety classifier
 """
 from __future__ import annotations
 
@@ -111,10 +117,12 @@ def build_advisory(
     # ── 3. Cyclones (JTWC) ──
     cyclone_dist_km: float | None = None
     cyclone_note = "Cyclone status not checked."
+    cyclone_checked = False
     try:
         # Basin-filtered like alerts.evaluate — ORCA serves Indian
         # waters; a far-away WPac typhoon must never tint the verdict.
         cyc = jtwc.nearest_cyclone(lat, lon, basins=["io", "sh"])
+        cyclone_checked = bool(cyc.get("found") or cyc.get("checked"))
         if cyc.get("found"):
             c = cyc["cyclone"]
             cyclone_dist_km = cyc["distance_km"]
@@ -148,7 +156,7 @@ def build_advisory(
         if wave_now >= 4.0 or (wave_outlook or 0) >= 4.0:
             reason("no_go", "high_waves",
                    f"🌊 Waves {wave_now:.1f} m now, up to {(wave_outlook or wave_now):.1f} m in 48 h "
-                   "— beyond safe small-craft limits (≥ 4 m).")
+                   "— crosses ORCA's configured no-go threshold (≥ 4 m).")
         elif wave_now >= 2.5 or (wave_outlook or 0) >= 2.5:
             reason("caution", "waves_elevated",
                    f"🌊 Waves {wave_now:.1f} m (peak {(wave_outlook or wave_now):.1f} m) — "
@@ -192,9 +200,9 @@ def build_advisory(
                    "manageable; small boats should mind the gusts, not the average.")
         elif g is not None:
             reason("info", "wind_ok",
-                   f"💨 Wind {wind_now:.0f} kn, gusts {g:.0f} kn — comfortable.")
+                   f"💨 Wind {wind_now:.0f} kn, gusts {g:.0f} kn — below configured caution thresholds.")
         else:
-            reason("info", "wind_ok", f"💨 Wind {wind_now:.0f} kn — comfortable.")
+            reason("info", "wind_ok", f"💨 Wind {wind_now:.0f} kn — below configured caution threshold.")
 
     if current_kn is not None and current_kn > 3.0:
         reason("info", "current_strong",
@@ -261,11 +269,6 @@ def build_advisory(
             reason("caution", "rain_moderate",
                    f"🌧️ {rain24:.0f} mm rain expected in 24 h — poor visibility at times.")
 
-    if chl is not None and chl > 8:
-        reason("caution", "bloom_level_chl",
-               f"🦠 Chlorophyll {chl:.1f} mg/m³ — bloom-level; possible low-oxygen / HAB water, "
-               "avoid fish from this patch until it clears.")
-
     # ── 5. Official INCOIS PFZ proximity ──
     nearest_pfz_km: float | None = None
     pfz_info: dict[str, Any] = {"found": False}
@@ -287,9 +290,32 @@ def build_advisory(
         reason("info", "pfz_check_failed", f"Official PFZ advisory unavailable right now ({type(e).__name__}).")
 
     # ── Verdict ──
+    # A lack of hazards is not evidence of safety. GO requires current waves,
+    # sustained wind, gusts, daily weather classification, and a completed
+    # regional cyclone check. Known NO-GO evidence still takes precedence.
+    missing_safety_evidence: list[str] = []
+    if wave_now is None:
+        missing_safety_evidence.append("wave height")
+    if wind_now is None:
+        missing_safety_evidence.append("wind speed")
+    if gust_now is None:
+        missing_safety_evidence.append("wind gusts")
+    if wx_code is None:
+        missing_safety_evidence.append("daily weather condition")
+    if not cyclone_checked:
+        missing_safety_evidence.append("regional cyclone check")
+    if missing_safety_evidence:
+        reason(
+            "unknown",
+            "safety_data_unavailable",
+            "Live safety evidence unavailable: " + ", ".join(missing_safety_evidence) + ".",
+        )
+
     sevs = {r["severity"] for r in reasons}
     if "no_go" in sevs:
         verdict = "no_go"
+    elif missing_safety_evidence:
+        verdict = "unknown"
     elif "caution" in sevs:
         verdict = "caution"
     else:
@@ -307,12 +333,15 @@ def build_advisory(
     elif verdict == "caution":
         plain_en.append("⚠️ You may go, but only with extra care — stay close to shore.")
         plain_hi.append("⚠️ Jaa sakte hain, par bahut savdhani se — kinaare ke paas rahiye.")
+    elif verdict == "unknown":
+        plain_en.append("❓ Do not depart until live conditions or an official bulletin can be checked.")
+        plain_hi.append("❓ Live haalat ya sarkari bulletin jaanchne tak rawana na hon.")
     else:
         plain_en.append("⛔ Do NOT sail today. Stay on land.")
         plain_hi.append("⛔ Aaj samundar mein MAT jaiye. Zameen par rahiye.")
     top = sorted(
-        [r for r in reasons if r["severity"] in ("no_go", "caution")],
-        key=lambda r: 0 if r["severity"] == "no_go" else 1,
+        [r for r in reasons if r["severity"] in ("no_go", "caution", "unknown")],
+        key=lambda r: {"no_go": 0, "unknown": 1, "caution": 2}[r["severity"]],
     )[:2]
     for r in top:
         plain_en.append(f"Why: {r['msg']}")
@@ -325,7 +354,7 @@ def build_advisory(
             f"Lehren ~{wave_now:.1f} m aur hawa ~{wind_now:.0f} kn — dono safe seema ke andar."
         )
     sw = safe_window
-    if sw.get("found") and verdict != "no_go":
+    if sw.get("found") and verdict in ("go", "caution"):
         _w0 = str(sw.get("from_utc") or "")[5:16].replace("T", " ")
         _w1 = str(sw.get("to_utc") or "")[5:16].replace("T", " ")
         plain_en.append(f"Best window: {_w0} → {_w1} UTC (the calmest stretch).")
@@ -347,9 +376,54 @@ def build_advisory(
             "headline_en": "NO-GO — stay on land today.",
             "headline_hi": "MAT JAIYE — aaj zameen par rahiye.",
         },
+        "unknown": {
+            "icon": "❓", "color": "slate",
+            "headline_en": "NOT VERIFIED — check conditions before departure.",
+            "headline_hi": "JAANCH ZAROORI — rawana hone se pehle haalat dekhein.",
+        },
     }[verdict]
 
     valid_until = (started + timedelta(hours=ADVISORY_TTL_HOURS)).isoformat(timespec="seconds")
+
+    # Normalized, additive measurement contract for mobile clients. The legacy
+    # scalar ``variables`` object stays intact for the existing web console.
+    # Every available number carries its source and observation/fetch time;
+    # unavailable numbers remain null and are never replaced with defaults.
+    forecast_source = point_fc.get("source") if point_fc else None
+    forecast_time = now_f.get("time") or point_fc.get("fetched_at") or started.isoformat(timespec="seconds")
+    snapshot_time = snap.get("fetched_at") or started.isoformat(timespec="seconds")
+
+    def variable_detail(value, unit: str, threshold, status: str, source, observed_at, direction=None):
+        return {
+            "value": value,
+            "unit": unit,
+            "threshold": threshold,
+            "status": status if value is not None else "unavailable",
+            "source": source if value is not None else None,
+            "observed_at": observed_at if value is not None else None,
+            "direction": direction,
+        }
+
+    wave_status = "danger" if (wave_now or 0) >= 4.0 else "caution" if (wave_now or 0) >= 2.5 else "good"
+    wind_status = "caution" if (wind_now or 0) >= 20.0 else "good"
+    gust_status = "danger" if (gust_now or 0) >= 34.0 else "caution" if (gust_now or 0) >= 28.0 else "good"
+    current_status = "caution" if (current_kn or 0) > 3.0 else "good"
+    chl_status = "context_only"
+    variable_details = {
+        "wave_height": variable_detail(wave_now, "m", 2.5, wave_status, forecast_source, forecast_time),
+        "wind_speed": variable_detail(wind_now, "kn", 20.0, wind_status, forecast_source, forecast_time),
+        "wind_gusts": variable_detail(gust_now, "kn", 28.0, gust_status, forecast_source, forecast_time),
+        "sea_surface_temp": variable_detail(sst_c, "°C", None, "context_only", sst_source, snapshot_time),
+        "ocean_current": variable_detail(
+            current_kn, "kn", 3.0, current_status, forecast_source, forecast_time,
+            _deg_to_compass(now_f.get("current_dir_deg")),
+        ),
+        "chlorophyll": variable_detail(
+            chl, "mg/m³", None, chl_status, snap.get("chlorophyll_source"),
+            snap.get("chlorophyll_date") or snapshot_time,
+        ),
+    }
+
     return {
         "type": "advisory",
         "lat": lat,
@@ -375,6 +449,7 @@ def build_advisory(
             "nearest_pfz_bearing": _deg_to_compass(pfz_info.get("bearing_deg")),
             "pfz_advisory_date": pfz_info.get("advisory_date"),
         },
+        "variable_details": variable_details,
         "outlook_48h": n48,
         "hourly_chart": hourly_chart,
         "plain_en": plain_en,

@@ -1,7 +1,8 @@
 """Agent 1: Ocean Analysis 🌊
 
-Analyzes SST, waves, currents, swell from Open-Meteo Marine API data.
-Detects changes and anomalies in ocean conditions.
+Reports SST and wave context from Open-Meteo Marine API data. It applies the
+ORCA Phase-1 wave thresholds only to the short-term point forecast; historical
+window values and SST remain context and never become fishing/safety proof.
 
 Inputs: ZoneSnapshot (from orca_data)
 Outputs: dict of findings:
@@ -30,49 +31,35 @@ def analyze(snap: dict[str, Any]) -> dict[str, Any]:
     wave_max = snap.get("wave_max")
     wave_mean = snap.get("wave_mean")
 
-    # SST analysis — pelagic fish (tuna, mackerel) prefer 24-29°C
     if sst_mean is not None:
-        if 24 <= sst_mean <= 29:
-            findings.append({
-                "type": "sst_optimal",
-                "severity": "good",
-                "value": sst_mean,
-                "msg": f"Mean SST {sst_mean}°C is in the optimal range for pelagic fish.",
-            })
-        elif 22 <= sst_mean <= 31:
-            findings.append({
-                "type": "sst_acceptable",
-                "severity": "info",
-                "value": sst_mean,
-                "msg": f"Mean SST {sst_mean}°C is acceptable but not optimal.",
-            })
-        elif sst_mean < 22:
-            findings.append({
-                "type": "sst_cold",
-                "severity": "warn",
-                "value": sst_mean,
-                "msg": f"Mean SST {sst_mean}°C is cold — likely upwelling, may reduce surface catch.",
-            })
-        else:  # > 31
-            findings.append({
-                "type": "sst_warm",
-                "severity": "warn",
-                "value": sst_mean,
-                "msg": f"Mean SST {sst_mean}°C is warm — thermal stress, fish move deeper.",
-            })
+        findings.append({
+            "type": "sst_observation",
+            "severity": "info",
+            "value": sst_mean,
+            "unit": "degC",
+            "observed_for": snap.get("date"),
+            "retrieved_at": snap.get("fetched_at"),
+            "source": "Open-Meteo Marine API via ORCA snapshot",
+            "msg": f"Mean SST observation {sst_mean}°C; no species, catch, or safety inference was made.",
+        })
 
-    # SST swing = frontal activity (good for fish aggregation)
+    # These max/min values span the requested historical window; their
+    # difference is temporal range, not evidence of a spatial thermal front.
     if sst_max is not None and sst_min is not None:
-        sst_swing = sst_max - sst_min
-        if sst_swing >= 2.0:
-            findings.append({
-                "type": "sst_front",
-                "severity": "good",
-                "value": sst_swing,
-                "msg": f"SST swing {sst_swing:.1f}°C — strong thermal front, fish aggregate at boundaries.",
-            })
+        sst_range = sst_max - sst_min
+        findings.append({
+            "type": "sst_window_range",
+            "severity": "info",
+            "value": sst_range,
+            "unit": "degC",
+            "observed_for": snap.get("date"),
+            "retrieved_at": snap.get("fetched_at"),
+            "source": "Open-Meteo Marine API via ORCA snapshot",
+            "msg": f"SST range over the requested window: {sst_range:.1f}°C; this is not a spatial-front diagnosis.",
+        })
 
-    # Wave analysis — small-craft advisory thresholds (IMD standard).
+    # Wave analysis — ORCA Phase-1 configured thresholds (not a
+    # vessel-specific or official small-craft certification).
     # wave_now / wave_peak_48h come from the point forecast (attached to
     # the snapshot in orca_data). wave_max here is the PAST ~30-day
     # window maximum — shown as clearly-labelled HISTORY only, never as
@@ -105,8 +92,8 @@ def analyze(snap: dict[str, Any]) -> dict[str, Any]:
                 "type": "wave_calm",
                 "severity": "good",
                 "value": h,
-                "msg": (f"Waves manageable: {now_txt}peak {h} m in next 48 h "
-                        "— safe for all vessel classes."),
+                "msg": (f"Wave evidence: {now_txt}peak {h} m in next 48 h "
+                        "— below ORCA's configured caution threshold."),
             })
         if wave_max is not None:
             findings.append({
@@ -117,46 +104,45 @@ def analyze(snap: dict[str, Any]) -> dict[str, Any]:
                         "(history for context — NOT today's condition)."),
             })
     elif wave_max is not None:
-        # No short-term forecast — be explicit that this is the window max.
-        if wave_max >= 4.0:
-            sev, typ = "high", "wave_warning_high"
-            tail = "HIGH sea state in recent window, small craft should not venture out."
-        elif wave_max >= 2.5:
-            sev, typ = "warn", "wave_caution"
-            tail = "rough seas in recent window, exercise caution."
-        else:
-            sev, typ = "good", "wave_calm"
-            tail = "calm recent window, safe for all vessel classes."
+        # Historical context cannot substitute for a short-term forecast.
         findings.append({
-            "type": typ,
-            "severity": sev,
+            "type": "wave_recent_window",
+            "severity": "info",
             "value": wave_max,
-            "msg": (f"Max wave height {wave_max} m over the past ~30 days "
-                    f"(short-term forecast unavailable) — {tail}"),
+            "unit": "m",
+            "observed_for": snap.get("date"),
+            "retrieved_at": snap.get("fetched_at"),
+            "source": "Open-Meteo Marine API via ORCA snapshot",
+            "msg": (f"Past-window wave maximum {wave_max} m; the short-term "
+                    "forecast is unavailable, so current wave risk is unknown."),
         })
 
-    # Risk level — CENTRAL shared rule: any real measurement (even all
-    # "info") is a LOW answer, not "no data".
     from pipeline.agents import risk_from_findings
-    has_meas = any(v is not None for v in (sst_mean, sst_max, wave_max, wave_now, wave_peak))
-    risk = risk_from_findings(findings, has_data=has_meas)
+    complete_wave_evidence = wave_now is not None and wave_peak is not None
+    risk = risk_from_findings(findings, has_data=complete_wave_evidence)
 
-    # Summary
-    if not findings:
-        summary = "No ocean data available for this zone."
+    if wave_peak is None:
+        summary = "Short-term wave evidence unavailable; SST/history are context only."
+    elif risk in ("high", "moderate"):
+        summary = "Short-term wave forecast crosses an ORCA configured threshold."
     else:
-        n_good = sum(1 for f in findings if f["severity"] == "good")
-        n_warn = sum(1 for f in findings if f["severity"] in ("warn", "high"))
-        if n_warn > n_good:
-            summary = f"Ocean conditions are concerning: {n_warn} warnings vs {n_good} positives."
-        elif n_good > 0:
-            summary = f"Ocean conditions are favorable: {n_good} positive signals."
-        else:
-            summary = "Ocean conditions are neutral."
+        summary = "Short-term wave forecast is below ORCA's configured wave thresholds."
+
+    for finding in findings:
+        if finding.get("type", "").startswith("wave_"):
+            finding.setdefault("unit", "m")
+            finding.setdefault("observed_for", snap.get("date"))
+            finding.setdefault("retrieved_at", snap.get("fetched_at"))
+            finding.setdefault("source", "Open-Meteo Marine API via ORCA snapshot/point forecast")
 
     return {
         "agent": "ocean",
         "findings": findings,
         "summary": summary,
         "risk_level": risk,
+        "evidence": {
+            "wave_now_available": wave_now is not None,
+            "wave_outlook_available": wave_peak is not None,
+            "complete": complete_wave_evidence,
+        },
     }

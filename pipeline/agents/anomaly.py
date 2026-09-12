@@ -1,24 +1,10 @@
 """Agent 8: Anomaly Detection 🔍
 
-Compares current conditions with historical/baseline data. Detects
-unusual SST, chlorophyll, wave, current, and weather patterns.
-
-For v1 we use Open-Meteo's Historical Weather API (ERA5 reanalysis,
-1940-present) as a 30-year baseline. For SST, the ERA5 daily
-aggregates are available. For chlorophyll, we don't have a free
-historical baseline, so we just compare SST against the 1991-2020
-climatology.
-
-Real implementation would also use:
-  - NOAA OISST v2.1 (1982-present daily SST, 0.25°)
-  - ESA CCI chlorophyll (1997-present, 4 km)
-  - IMD gridded temperature (1901-present)
-
-Anomaly thresholds (from IPCC AR6 definitions):
-  - < 1°C   : normal range
-  - 1-2°C   : warm anomaly
-  - 2-3°C   : strong warm anomaly
-  - > 3°C   : extreme anomaly (likely marine heatwave)
+Computes a provisional SST deviation from a small Open-Meteo Archive sample:
+the same date plus two days in each of the three prior years (or fewer when a
+request fails). This is not a 30-year climatology, z-score, IPCC attribution,
+or marine-heatwave diagnosis. The 1/2/3°C bands are internal ORCA display
+flags requiring scientific validation.
 
 Inputs: ZoneSnapshot (lat, lon, target_date)
 Outputs: dict of findings
@@ -35,16 +21,16 @@ from typing import Any
 
 
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
-SOURCE_LABEL = "Open-Meteo Archive (ERA5 reanalysis, 30-year baseline)"
+SOURCE_LABEL = "Open-Meteo Archive (three-prior-year date-window sample)"
 
 
 def _fetch_baseline(lat: float, lon: float, target_date: str, window_years: int = 3) -> dict:
     """Fetch the same date-of-year from the past N years to build a baseline.
 
-    Uses the last 3 years as a quick proxy for the climatology.
+    Uses at most the last 3 years as a small comparison sample, not climatology.
     Time-budgeted: on slow networks each ERA5 archive call can eat
     15-40 s, so we hard-stop at ~22 s total and give up after 2
-    consecutive failures rather than blocking the whole 10-agent run.
+    consecutive failures rather than blocking the whole ten-specialist run.
     Production would use 30 years of ERA5.
     """
     import time
@@ -109,7 +95,7 @@ def _fetch_baseline(lat: float, lon: float, target_date: str, window_years: int 
 def baseline_cached(lat: float, lon: float, target_date: str) -> dict:
     """_fetch_baseline through the shared TTL cache — ONE ERA5 walk per
     0.01° cell per day, shared by analyze() AND the zone-snapshot's
-    parallel warm-up job (same key), so the 10-agent run never pays the
+    parallel warm-up job (same key), so the ten-specialist run never pays the
     3 archive calls serially after the gather. (Serial payment is what
     pushed a cold /reason past its 110 s deadline on the 2026-09-07
     night run — URLError×2 at the very end of the request.)
@@ -148,7 +134,6 @@ def analyze(snap: dict[str, Any]) -> dict[str, Any]:
         }
 
     current_sst = snap.get("sst_mean") or snap.get("sst_max")
-    current_wave = snap.get("wave_max")
 
     try:
         # Shared cached helper — when the zone snapshot already warmed
@@ -198,7 +183,10 @@ def analyze(snap: dict[str, Any]) -> dict[str, Any]:
         "type": "baseline_built",
         "severity": "info",
         "value": baseline,
-        "msg": f"Baseline from {baseline['baseline_sst_n']} prior years.",
+        "source": SOURCE_LABEL,
+        "observed_for": target_date,
+        "retrieved_at": snap.get("fetched_at"),
+        "msg": f"Comparison sample contains {baseline['baseline_sst_n']} prior-year value(s); it is not climatology.",
     })
 
     # SST anomaly
@@ -206,42 +194,36 @@ def analyze(snap: dict[str, Any]) -> dict[str, Any]:
         delta = current_sst - baseline["baseline_sst_mean"]
         if abs(delta) >= 3.0:
             sev = "high"
-            label = "EXTREME anomaly (likely marine heatwave or cold spell)"
+            label = "3°C internal deviation flag"
         elif abs(delta) >= 2.0:
             sev = "warn"
-            label = "STRONG anomaly"
+            label = "2°C internal deviation flag"
         elif abs(delta) >= 1.0:
             sev = "info"
-            label = "Notable anomaly"
+            label = "1°C internal deviation flag"
         else:
             sev = "good"
-            label = "Normal range"
+            label = "below the 1°C internal display flag"
         direction = "warmer" if delta > 0 else "cooler"
         findings.append({
             "type": "sst_anomaly",
             "severity": sev,
             "value": round(delta, 2),
-            "msg": f"SST {current_sst:.1f}°C is {abs(delta):.1f}°C {direction} than the 5-year baseline ({baseline['baseline_sst_mean']:.1f}°C) — {label}.",
+            "unit": "degC",
+            "source": SOURCE_LABEL,
+            "observed_for": target_date,
+            "retrieved_at": snap.get("fetched_at"),
+            "baseline_sample_size": baseline["baseline_sst_n"],
+            "msg": (
+                f"SST {current_sst:.1f}°C is {abs(delta):.1f}°C {direction} than "
+                f"the {baseline['baseline_sst_n']}-prior-year sample mean "
+                f"({baseline['baseline_sst_mean']:.1f}°C) — {label}; not a heatwave diagnosis."
+            ),
         })
 
-    # Wave anomaly
-    if current_wave is not None and baseline.get("baseline_wave_mean") is not None and baseline["baseline_wave_mean"] > 0:
-        ratio = current_wave / baseline["baseline_wave_mean"]
-        if ratio >= 1.5:
-            sev = "warn"
-            msg = f"Wave height {current_wave}m is {ratio:.1f}× the baseline ({baseline['baseline_wave_mean']}m) — unusually rough."
-        elif ratio <= 0.5:
-            sev = "good"
-            msg = f"Wave height {current_wave}m is {ratio:.1f}× the baseline ({baseline['baseline_wave_mean']}m) — unusually calm."
-        else:
-            sev = "info"
-            msg = f"Wave height {current_wave}m is {ratio:.1f}× the baseline ({baseline['baseline_wave_mean']}m) — within normal range."
-        findings.append({
-            "type": "wave_anomaly",
-            "severity": sev,
-            "value": round(ratio, 2),
-            "msg": msg,
-        })
+    # A snapshot's wave_max spans a different aggregation window from this
+    # baseline sample, so comparing their ratio would be dimensionally
+    # misleading. Wave anomalies are intentionally not emitted.
 
     # Risk
     severities = [f["severity"] for f in findings]
@@ -255,11 +237,11 @@ def analyze(snap: dict[str, Any]) -> dict[str, Any]:
         risk = "unknown"
 
     if risk == "high":
-        summary = "🔍 EXTREME anomaly vs historical baseline — possible marine heatwave."
+        summary = "🔍 SST crossed the 3°C internal deviation flag; this is not a heatwave diagnosis."
     elif risk == "moderate":
-        summary = "🔍 Notable anomaly vs historical baseline — worth investigating."
+        summary = "🔍 SST crossed the 2°C internal deviation flag; scientific validation is pending."
     elif risk == "low":
-        summary = "🔍 Conditions within normal historical range."
+        summary = "🔍 SST difference is below the 1°C internal display flag for this small sample."
     else:
         summary = "🔍 Anomaly detection unavailable."
 

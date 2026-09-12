@@ -1,8 +1,11 @@
 """JTWC tropical cyclone tracker — REAL active cyclones, no simulation.
 
-Source: US Joint Typhoon Warning Center (Pearl Harbor), the WMO-designated
-agency that issues tropical cyclone warnings for the North Indian Ocean
-(basin code IO), Northwest Pacific (WP) and Southern Hemisphere (SH).
+Source: US Joint Typhoon Warning Center (Pearl Harbor), which issues
+US Department of Defense tropical-cyclone guidance for the North Indian
+Ocean (basin code IO), Northwest Pacific (WP) and Southern Hemisphere (SH).
+JTWC is not a WMO-designated RSMC; for Indian public warnings, IMD/RSMC
+New Delhi remains the official authority. ORCA treats JTWC as supplemental
+hazard evidence, not as a replacement for local official bulletins.
 
 Feed:        https://www.metoc.navy.mil/jtwc/rss/jtwc.rss
 Products:    https://www.metoc.navy.mil/jtwc/products/{id}web.txt

@@ -13,7 +13,7 @@ INTEGRATION STATUS (2026-09-04):
     memory risk is gone. The server itself is still often slow or down
     from outside India — hence "backup": it only runs when NOAA and
     OC-CCI BOTH failed, never in the hot path.
-  - PFZ advisory:  we use the WORKING official feed (GeoServer WFS,
+  - PFZ advisory:  a separate official GeoServer WFS adapter is wired
     pipeline/incois_pfz.py) — that's the INCOIS product fishers
     actually use daily.
   - ERDDAP (erddap.incois.gov.in):  NO chlorophyll dataset — AMSR-E SST
@@ -194,11 +194,11 @@ def status() -> dict[str, Any]:
         "opendap_mode": "safe point-hyperslab (~0.6° box) — no full-array RAM load",
         "opendap_enabled_by_default": True,
         "opendap_disable_hint": "export ORCA_INCOIS_OPENDAP=0 to disable the backup query",
-        "opendap_known_issue": "Server is frequently slow/down from outside India — used as backup only",
+        "opendap_known_issue": "Live audit returned NetCDF I/O failure in this runtime — used as backup only",
         "erddap_url": INCOIS_ERDDAP_URL,
         "erddap_datasets": "15 griddap datasets, none for chlorophyll",
         "pfz_url": INCOIS_PFZ_URL,
-        "pfz_note": "PFZ lines come from the WORKING INCOIS GeoServer WFS (pipeline/incois_pfz.py)",
+        "pfz_note": "PFZ lines use the INCOIS GeoServer WFS adapter (pipeline/incois_pfz.py); availability is checked per request",
         "recommendation": (
             "Primary chlorophyll: NOAA ERDDAP (global NRT). Cross-check: ESA OC-CCI. "
             "Indian Ocean 🇮🇳: MOSDAC OCM-3 with credentials. INCOIS OPeNDAP stays a "

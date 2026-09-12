@@ -146,6 +146,16 @@ def _point_state(pf: dict[str, Any] | None) -> tuple[str, dict[str, Any]]:
     if why:
         return "caution", {**row, "why": "; ".join(why)}
 
+    missing = []
+    if wave_now is None and wave_48 is None:
+        missing.append("waves")
+    if wind_48 is None:
+        missing.append("wind")
+    if gust_48 is None:
+        missing.append("gusts")
+    if missing:
+        return "unknown", {**row, "note": f"missing safety evidence: {', '.join(missing)}"}
+
     if (current or 0) > CURRENT_STRONG_KN:
         row["note"] = f"strong surface current {current:.1f} kn"
     return "good", row
@@ -156,16 +166,14 @@ def _reduce_verdict(states: list[str], land_ok: bool | None) -> dict[str, Any]:
     known = sum(1 for s in states if s != "unknown")
     if land_ok is False:
         level = "nogo"
-    elif land_ok is None and known == 0:
+    elif known == 0:
         level = "unknown"
     elif "danger" in states:
         level = "nogo"
-    elif "caution" in states or "unknown" in states:
+    elif land_ok is None or "caution" in states or "unknown" in states:
         level = "caution"
-    elif known > 0:
-        level = "go"
     else:
-        level = "unknown"
+        level = "go"
     return {
         "level": level,
         "points_known": known,
@@ -233,6 +241,12 @@ def route_advisory(from_lat: float, from_lon: float,
         rows.append({**p, "state": state, **row})
 
     verdict = _reduce_verdict(states, rc.get("ok"))
+    verdict["headline"] = {
+        "go": "Route conditions are workable at every verified sample.",
+        "caution": "Use caution: at least one route sample is rough or unavailable.",
+        "nogo": "Do not follow this route: land or dangerous marine conditions were detected.",
+        "unknown": "Route safety could not be verified from the available evidence.",
+    }[verdict["level"]]
 
     # Safest departure window at the START point (the skipper's real
     # decision is 'when do I leave'), computed from the same fetch —
@@ -262,12 +276,13 @@ def route_advisory(from_lat: float, from_lon: float,
         "points": rows,
         "verdict": verdict,
         "safe_window_at_start": window,
+        "sources": sources_used,
         "sources_used": sources_used,
         "sources_failed": sources_failed,
         "sample_spacing_km": eff_spacing,
         "method": ("verified course (GLOBE 1 km mask) sampled every "
                    f"{eff_spacing:.0f} km; live Open-Meteo marine "
-                   "forecast per point; WMO/IMD small-craft thresholds "
+                   "forecast per point; ORCA Phase-1 configured thresholds "
                    "— identical to the single-point advisory"),
         "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }

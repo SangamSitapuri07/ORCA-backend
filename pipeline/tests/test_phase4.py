@@ -153,6 +153,18 @@ def test_safe_window_calm_forecast():
     assert "found" in sw
 
 
+def test_safe_window_missing_measurements_is_not_declared_safe():
+    incomplete = {
+        "hourly": {
+            "time": [f"2030-01-01T{h:02d}:00" for h in range(8)],
+            "wave_height_m": [1.0] * 8,
+            "wind_kn": [None] * 8,
+            "gust_kn": [None] * 8,
+        }
+    }
+    assert fc.find_safe_window(incomplete, horizon_hours=8)["found"] is False
+
+
 def test_safe_window_stormy_forecast():
     stormy = {
         "hourly": {
@@ -172,6 +184,10 @@ def test_safe_window_stormy_forecast():
 def _patch_calm(monkeypatch):
     monkeypatch.setattr("pipeline.advisory.zone_snapshot_cached", lambda *a, **k: dict(FAKE_SNAPSHOT))
     monkeypatch.setattr(fc, "get_point_forecast", lambda *a, **k: dict(FAKE_FORECAST))
+    monkeypatch.setattr(
+        "pipeline.agents.weather.get_daily_summary",
+        lambda *a, **k: {"wx_code": 1, "precip_probability_max": 5.0},
+    )
     monkeypatch.setattr(incois_pfz, "nearest_pfz", lambda lat, lon: {
         "available": True, "found": True, "distance_km": 24.0, "distance_nm": 13.0,
         "bearing_deg": 300, "nearest_point": {"lat": 21.05, "lon": 70.2},
@@ -194,6 +210,16 @@ def test_advisory_go_verdict(monkeypatch):
     assert adv["icon"] == "✅"
     assert any(r["code"] == "official_pfz" for r in adv["reasons"])
     assert adv["sources"], "advisory must cite its sources"
+
+
+def test_advisory_never_returns_go_when_live_safety_data_is_missing(monkeypatch):
+    _patch_calm(monkeypatch)
+    monkeypatch.setattr(fc, "get_point_forecast", lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
+    adv = build_advisory(20.9, 70.37)
+    assert adv["verdict"] == "unknown"
+    assert adv["icon"] == "❓"
+    assert any(r["code"] == "safety_data_unavailable" for r in adv["reasons"])
+    assert "safe to sail" not in " ".join(adv["plain_en"]).lower()
 
 
 def test_advisory_no_go_on_cyclone(monkeypatch):
@@ -234,6 +260,18 @@ def test_alerts_calm_point_no_alerts(monkeypatch):
     made = alerts_mod.evaluate(20.9, 70.37)
     assert made == []
     assert alerts_mod.list_alerts() == []
+
+
+def test_alerts_provider_failure_is_not_reported_as_all_clear(monkeypatch):
+    alerts_mod._store.clear()
+    monkeypatch.setattr(fc, "get_point_forecast", lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
+    monkeypatch.setattr(jtwc, "nearest_cyclone", lambda lat, lon, **k: {
+        "checked": False, "found": False, "errors": ["RSS unreachable"], "source": "JTWC"})
+    status = alerts_mod.evaluate_status(20.9, 70.37)
+    assert status["alerts"] == []
+    assert status["sources_used"] == []
+    assert any("Open-Meteo" in error for error in status["sources_failed"])
+    assert any("JTWC" in error for error in status["sources_failed"])
 
 
 def test_alerts_gale_warning(monkeypatch):

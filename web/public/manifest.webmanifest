@@ -1,0 +1,11 @@
+{
+  "name": "ORCA — Marine Intelligence",
+  "short_name": "ORCA",
+  "description": "Marine EcOsystem Reasoning with Collaborative Agents — SIH 2026 PS 176. Real-time marine intelligence for Indian fisherfolk.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#070D1A",
+  "theme_color": "#070D1A",
+  "lang": "hi-IN",
+  "icons": []
+}

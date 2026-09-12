@@ -1,18 +1,59 @@
+# Python
 **/__pycache__/
-__pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 .venv/
 .pipeline-venv/
 .pytest_cache/
+.coverage
+htmlcov/
+
+# Environment / credentials
 .env
-.env.local
+.env.*
+!.env.example
+!**/.env.example
+*.jks
+*.keystore
+key.properties
+
+# Runtime data and logs
+logs/
 data/raw/
 data/cache/
+data/tiles/
+data/seamarks/
 data/mosdac_granules/
+data/feedback.jsonl
 *.nc
 *.h5
 *.hdf5
 *.tif
 *.tiff
-logs/
+
+# Node / Next.js
+**/node_modules/
+**/.next/
+**/out/
+**/coverage/
+npm-debug.log*
+
+# Flutter / Dart / Android
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.packages
+frontend/build/
+frontend/android/.gradle/
+frontend/android/local.properties
+frontend/android/app/debug/
+frontend/android/app/profile/
+frontend/android/app/release/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.iml
+
+# TypeScript incremental metadata
+*.tsbuildinfo

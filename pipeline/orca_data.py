@@ -10,7 +10,7 @@ The five data sources (in priority order):
     2. Open-Meteo Marine API            (FREE, no key)  → SST + waves
     3. Global Fishing Watch AIS         (FREE w/ token) → fishing activity
     4. INCOIS LAS OPeNDAP               (FREE, no key)  → backup chlorophyll
-    5. MOSDAC OCM-3 L4 (local)          (🇮🇳 creds)     → primary chlorophyll
+    5. MOSDAC OCM-3 L2C LAC granules   (🇮🇳 creds)     → chlorophyll cross-check
 
 Each source is fetched in turn with a try/except — if one fails (network,
 auth, quota), the snapshot still has data from the others. Sources are
@@ -106,7 +106,7 @@ def _get_gfw_fleet():
 
 def _get_baseline():
     """Anomaly agent's cached ERA5 baseline walker. The snapshot warms
-    it INSIDE the parallel gather so the 10-agent run never pays the
+    it INSIDE the parallel gather so the ten-specialist run never pays the
     3 archive calls serially afterwards (that serial tail pushed a cold
     /reason past its 110 s deadline on the 2026-09-07 night log)."""
     from pipeline.agents import anomaly
@@ -286,7 +286,7 @@ def zone_snapshot(
             )
         # Silent warmers: results are NOT snapshot fields — they pre-fill
         # the shared ttlcache under the exact keys the anomaly/weather
-        # agents (and the advisory) read, so the serial 10-agent run that
+        # agents (and the advisory) read, so the serial ten-specialist run that
         # follows the gather finds them warm. Never listed as
         # used/failed sources: the agents report their own status.
         try:
@@ -588,6 +588,9 @@ def zone_snapshot(
         if got_effort:
             snap["fishing_hours"] = effort.get("hours")
             snap["vessel_count_effort"] = effort.get("vessel_ids", 0)
+            snap["fishing_window_start"] = gfw_start
+            snap["fishing_window_end"] = gfw_end
+            snap["fishing_bbox_radius_deg"] = radius_deg
             if effort.get("_stale"):
                 snap["data_sources_used"].append(
                     f"Global Fishing Watch (effort, cached {effort['_stale_age_sec'] // 60}m old)"
@@ -642,48 +645,11 @@ def zone_snapshot(
     except Exception:  # noqa: BLE001
         pass  # ocean agent falls back to the labelled 30-day window max
 
-    # 6) Simple PFZ heuristic score (chlorophyll + SST + fishing presence)
-    snap["pfz_score"] = _pfz_score(snap)
-
+    # No synthetic PFZ score is generated. Official INCOIS PFZ advisories are
+    # exposed separately by /api/v1/voyage; combining generic SST,
+    # chlorophyll, and AIS effort into a recommendation would imply a
+    # validation/species model this backend does not have.
     return snap
-
-
-def _pfz_score(snap: dict[str, Any]) -> float | None:
-    """Naive PFZ score 0-1: high chlorophyll, optimal SST, fishing presence.
-
-    For real PFZ we'd use INCOIS's actual algorithm. This is a stopgap
-    so the UI can highlight zones in the meantime.
-    """
-    score = 0.0
-    weights = 0.0
-
-    # Chlorophyll: 0.1 (low) to 10+ (very high) mg/m^3 — bell curve, peak at 1-3
-    chl = snap.get("chlorophyll")
-    if chl is not None and chl > 0:
-        # log scale, peak at 1.0
-        import math
-        score += 1.0 - abs(math.log10(chl)) * 0.4
-        weights += 1.0
-
-    # SST: tuna and pelagics prefer 24-29°C
-    sst = snap.get("sst_mean") or snap.get("sst_max")
-    if sst is not None:
-        if 24 <= sst <= 29:
-            score += 1.0
-        elif 22 <= sst <= 31:
-            score += 0.5
-        else:
-            score += 0.0
-        weights += 1.0
-
-    # Fishing presence: any boats = +0.3
-    if (snap.get("fishing_hours") or 0) > 0:
-        score += 0.3
-        weights += 0.3
-
-    if weights == 0:
-        return None
-    return round(min(1.0, max(0.0, score / weights)), 2)
 
 
 def zone_snapshot_cached(

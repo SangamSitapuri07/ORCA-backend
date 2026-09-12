@@ -89,20 +89,9 @@ def analyze(snap: dict[str, Any], agent_results: list[dict[str, Any]] | None = N
             score += w
             findings.append(f)
 
-    # Aggregate validation warnings
-    val_result = next((a for a in agent_results if a.get("agent") == "validation"), {})
-    for f in val_result.get("findings", []):
-        if f["severity"] == "error":
-            score += 2
-            findings.append({
-                "type": f["type"],
-                "severity": "high",
-                "value": f.get("value"),
-                "msg": "Data error: " + f["msg"],
-            })
-        elif f["type"] == "low_source_coverage":
-            score += 1
-            findings.append(f)
+    # Validation describes confidence, not sea state. Missing providers must
+    # never be converted into an environmental hazard score (or into LOW).
+    # Confidence remains visible through the validation trace and coverage.
 
     # Aggregate ecology warnings
     eco_result = next((a for a in agent_results if a.get("agent") == "marine_ecology"), {})
@@ -111,7 +100,36 @@ def analyze(snap: dict[str, Any], agent_results: list[dict[str, Any]] | None = N
             score += 2
             findings.append(f)
 
-    risk = _score_to_risk(score)
+    wave_complete = bool((ocean_result.get("evidence") or {}).get("complete"))
+    weather_complete = bool((wx_result.get("evidence") or {}).get("complete"))
+    evidence_complete = wave_complete and weather_complete
+    scored_risk = _score_to_risk(score)
+
+    # Known hazards still surface even if another provider failed. Absence of a
+    # hazard can only become LOW when both wave and wind/gust/weather evidence
+    # are complete; partial evidence is never interpreted as calm.
+    if not evidence_complete and scored_risk == "low":
+        missing = []
+        if not wave_complete:
+            missing.append("short-term wave evidence")
+        if not weather_complete:
+            missing.append("wind/gust/daily-weather evidence")
+        findings.append({
+            "type": "safety_data_unavailable",
+            "severity": "info",
+            "value": None,
+            "msg": f"Marine risk cannot be verified; missing {', '.join(missing)}.",
+        })
+        return {
+            "agent": "marine_risk",
+            "findings": findings,
+            "summary": "⚪ Risk unknown — use the deterministic skipper advisory and official bulletins.",
+            "risk_level": "unknown",
+            "risk_score": score,
+            "evidence_complete": False,
+        }
+
+    risk = scored_risk
     color = {
         "low": "🟢",
         "moderate": "🟡",
@@ -122,7 +140,7 @@ def analyze(snap: dict[str, Any], agent_results: list[dict[str, Any]] | None = N
     if risk == "critical":
         summary = f"{color} CRITICAL risk — DO NOT venture out. Multiple severe warnings active."
     elif risk == "high":
-        summary = f"{color} HIGH risk — only experienced crew with appropriate vessels should consider going out."
+        summary = f"{color} HIGH risk — an ORCA hazard threshold was crossed; this is not permission to depart."
     elif risk == "moderate":
         summary = f"{color} MODERATE risk — proceed with caution, monitor conditions."
     elif risk == "low":
@@ -136,4 +154,5 @@ def analyze(snap: dict[str, Any], agent_results: list[dict[str, Any]] | None = N
         "summary": summary,
         "risk_level": risk,
         "risk_score": score,
+        "evidence_complete": evidence_complete,
     }

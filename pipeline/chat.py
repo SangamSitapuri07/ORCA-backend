@@ -29,7 +29,7 @@ AGENT_META: dict[str, dict[str, str]] = {
     "satellite":      {"emoji": "🛰️", "name": "Satellite Analysis"},
     "weather":        {"emoji": "🌦️", "name": "Weather & Hazard"},
     "gis":            {"emoji": "🗺️", "name": "GIS & Spatial"},
-    "fisheries":      {"emoji": "🎣", "name": "Fisheries / PFZ"},
+    "fisheries":      {"emoji": "🎣", "name": "Fisheries Context"},
     "marine_ecology": {"emoji": "🐟", "name": "Marine Ecology"},
     "marine_risk":    {"emoji": "🚨", "name": "Marine Risk"},
     "anomaly":        {"emoji": "🔍", "name": "Anomaly Detection"},
@@ -117,7 +117,7 @@ def run_trace(
         "agent": "data_layer",
         "tool": "zone_snapshot",
         "args": {"lat": lat, "lon": lon, "date": target_date},
-        "summary": f"Snapshot built — {n_used} live sources answered.",
+        "summary": f"Snapshot built — {n_used} source result(s) used (live or explicitly labelled cached).",
     })
 
     # 2. Agents
@@ -168,10 +168,16 @@ def run_trace(
                 s = (f"⏱️ Next 48 h: waves ≤ {n48.get('wave_max_m')} m, "
                      f"wind ≤ {n48.get('wind_max_kn')} kn")
             elif tool == "alerts":
-                r = alerts_mod.evaluate(lat, lon)
+                r = alerts_mod.evaluate_status(lat, lon)
                 extra_results[tool] = r
-                s = (f"🔔 {len(r)} active alert(s) for this point."
-                     if r else "🔔 All clear — no threshold crossed.")
+                alert_count = len(r.get("alerts", []))
+                if alert_count:
+                    s = f"🔔 {alert_count} active alert(s) for this point."
+                elif r.get("evaluation_complete"):
+                    s = "🔔 Checks completed — no configured alert threshold crossed."
+                else:
+                    failed = len(r.get("sources_failed", []))
+                    s = f"🔔 Alert check incomplete ({failed} provider failure(s)); not an all-clear."
             else:
                 continue
             meta = EXTRA_META.get(tool, {"emoji": "🛠️", "name": tool})
@@ -214,8 +220,8 @@ def compose_answer(trace: dict[str, Any], message: str) -> str:
 
     if "pfz" in routing["intents"]:
         fish = next((a for a in trace["agent_results"] if a["agent"] == "fisheries"), None)
-        if fish and fish.get("verdict") not in (None, "unknown"):
-            parts.append(f"🎣 Fishing verdict: {fish['verdict'].replace('_', ' ')}.")
+        if fish and fish.get("verdict") not in (None, "unknown", "unavailable"):
+            parts.append(f"🎣 Official fishing verdict: {fish['verdict'].replace('_', ' ')}.")
         if v.get("nearest_pfz_nm") is not None:
             parts.append(
                 f"Nearest official INCOIS PFZ is {v['nearest_pfz_nm']} NM "
@@ -223,8 +229,10 @@ def compose_answer(trace: dict[str, Any], message: str) -> str:
                 f"(advisory of {v.get('pfz_advisory_date')}).")
         chl = v.get("chlorophyll_mg_m3")
         if chl is not None:
-            parts.append(f"Chlorophyll here: {chl:.2f} mg/m³ "
-                         + ("(productive water ✓)." if 0.5 <= chl <= 5 else "(not strong feeding water)."))
+            parts.append(
+                f"Chlorophyll here: {chl:.2f} mg/m³ (environmental context only; "
+                "not a catch or PFZ recommendation)."
+            )
         fr = trace["extra"].get("forecast", {})
         sw = fc.find_safe_window(fr) if fr else {"found": False}
         if sw.get("found"):
@@ -250,7 +258,7 @@ def compose_answer(trace: dict[str, Any], message: str) -> str:
     if "data_quality" in routing["intents"]:
         used = adv.get("sources", [])
         failed = adv.get("sources_failed", [])
-        parts.append(f"Data: {len(used)} sources live ({'; '.join(used[:4])}).")
+        parts.append(f"Data: {len(used)} source result(s) used ({'; '.join(used[:4])}).")
         if failed:
             parts.append(f"Issues: {failed[0]}" + (f" (+{len(failed)-1} more)" if len(failed) > 1 else ""))
 
@@ -261,7 +269,7 @@ def compose_answer(trace: dict[str, Any], message: str) -> str:
     if trace.get("insight") and trace["insight"].get("recommendation"):
         parts.append(trace["insight"]["recommendation"])
 
-    parts.append(f"Sources: {len(adv.get('sources', []))} live · advisory valid till "
+    parts.append(f"Sources: {len(adv.get('sources', []))} used · advisory valid till "
                  f"{adv['valid_until'][11:16]} UTC. {adv['disclaimer']}")
     return "\n".join(p for p in parts if p)
 
@@ -297,7 +305,7 @@ def stream_events(
             yield {"type": "chat.token", "payload": {"delta": " ".join(buf) + (" " if i < len(words) - 1 else "")}}
             buf = []
 
-    layers = ["official_pfz"] if "pfz" in trace["routing"]["tools"] else []
+    layers = ["official_pfz"] if "incois_pfz" in trace["routing"]["tools"] else []
     if trace["extra"].get("jtwc", {}).get("found"):
         layers += ["cyclone"]
     yield {"type": "chat.final", "payload": {

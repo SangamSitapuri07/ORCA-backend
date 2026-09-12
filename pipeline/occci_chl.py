@@ -35,7 +35,7 @@ from typing import Any
 
 
 ERDDAP_BASE = "https://comet.nefsc.noaa.gov/erddap/griddap/occci_v6_daily_1km"
-SOURCE_LABEL = "ESA OC-CCI v6.0 (PML, 1 km, IPCC standard)"
+SOURCE_LABEL = "ESA OC-CCI v6.0 (PML, 1 km)"
 
 
 def build_query_url(

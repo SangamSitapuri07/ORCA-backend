@@ -225,10 +225,13 @@ def find_safe_window(
         w = h["wave_height_m"][k] if k < len(h["wave_height_m"]) else None
         wd = h["wind_kn"][k] if k < len(h["wind_kn"]) else None
         g = h["gust_kn"][k] if k < len(h["gust_kn"]) else None
+        # A safety window requires all three authoritative measurements.
+        # Missing evidence is unknown, never silently treated as calm.
         ok = (
-            (w is None or w < wave_ok_m)
-            and (wd is None or wd < wind_ok_kn)
-            and (g is None or g < gust_ok_kn)
+            w is not None and wd is not None and g is not None
+            and w < wave_ok_m
+            and wd < wind_ok_kn
+            and g < gust_ok_kn
         )
         if ok and run_start is None:
             run_start = k

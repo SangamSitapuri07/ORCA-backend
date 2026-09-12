@@ -40,7 +40,7 @@ SOURCES = [
         "col_lon": 3,
     },
     {
-        "name": "ESA OC-CCI v6.0 (IPCC standard, 1km, no altitude axis)",
+        "name": "ESA OC-CCI v6.0 (ESA CCI product, 1km, no altitude axis)",
         "url": (
             "https://comet.nefsc.noaa.gov/erddap/griddap/occci_v6_daily_1km.json"
             "?chlor_a%5B(2026-08-15T12:00:00Z)%5D%5B(13.4):1:(13.6)%5D%5B(80.4):1:(80.6)%5D"

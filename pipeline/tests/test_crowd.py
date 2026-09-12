@@ -62,18 +62,17 @@ def test_privacy_no_exact_coords(tmp_path, monkeypatch):
 
 
 def _fake_candidates():
-    a = {"lat": 15.5, "lon": 83.5, "kind": "hotspot", "name": "A",
-         "pfz_meta": None, "chl": 2.0, "dist_km": 18.52}      # 10 NM → 98
-    b = {"lat": 16.5, "lon": 84.5, "kind": "hotspot", "name": "B",
-         "pfz_meta": None, "chl": 2.0, "dist_km": 74.08}      # 40 NM → 94
+    meta = {"advisory_date": "2026-09-09", "sector_name": "audit"}
+    a = {"lat": 15.5, "lon": 83.5, "kind": "pfz", "name": "A",
+         "pfz_meta": meta, "chl": None, "dist_km": 18.52}
+    b = {"lat": 16.5, "lon": 84.5, "kind": "pfz", "name": "B",
+         "pfz_meta": meta, "chl": None, "dist_km": 74.08}
     return [a, b]
 
 
 def test_voyage_spreads_across_calls(monkeypatch):
     monkeypatch.setattr(voyage, "_pfz_candidates",
                         lambda la, lo, mk, notes: _fake_candidates())
-    monkeypatch.setattr(voyage, "_hotspot_candidates",
-                        lambda la, lo, mk, notes: [])
     monkeypatch.setattr(voyage.fc, "get_point_forecast", lambda la, lo: {})
     monkeypatch.setattr(voyage, "_point_state_stub",
                         lambda pf: {"state": "good", "wave_m": 1.0, "why": None})
@@ -99,8 +98,6 @@ def test_voyage_spreads_across_calls(monkeypatch):
 def _patch_common(monkeypatch):
     monkeypatch.setattr(voyage, "_pfz_candidates",
                         lambda la, lo, mk, notes: _fake_candidates())
-    monkeypatch.setattr(voyage, "_hotspot_candidates",
-                        lambda la, lo, mk, notes: [])
     monkeypatch.setattr(voyage.fc, "get_point_forecast", lambda la, lo: {})
     monkeypatch.setattr(voyage, "_point_state_stub",
                         lambda pf: {"state": "good", "wave_m": 1.0, "why": None})
