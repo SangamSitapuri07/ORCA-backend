@@ -11,7 +11,7 @@ points fishermen at dry ground — a real bug caught in review.
 The mask is a real, static, public dataset (GLOBE global 1 km elevation,
 land = elevation > 0). It is not an approximation we invented and it
 needs no network at runtime, so it works the same on a demo laptop with
-flaky wi-fi.
+limited connectivity.
 
 Honest degradation: if the optional package is missing or errors,
 is_land() returns None ("unknown") and callers MUST treat None as KEEP —

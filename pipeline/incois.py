@@ -4,23 +4,20 @@ INCOIS publishes Indian Ocean chlorophyll from OCEANSAT-2 OCM and
 Oceansat-3 OCM-3, plus daily Potential Fishing Zone (PFZ) advisories
 for 586 fish landing centers along the Indian coast.
 
-INTEGRATION STATUS (2026-09-04):
-  - OPeNDAP THREDDS (las.incois.gov.in):  USED, but as a SAFE point-query
-    backup only. History lesson: the first version loaded the ENTIRE
-    global OCM-2 array into RAM (GBs) and OOM-crashed the backend on the
-    user's laptop mid-request. The current version asks the OPeNDAP
-    server for a tiny ~0.6° hyperslab (KBs over the wire, not GBs), so
-    memory risk is gone. The server itself is still often slow or down
-    from outside India — hence "backup": it only runs when NOAA and
-    OC-CCI BOTH failed, never in the hot path.
+INTEGRATION STATUS (audited 2026-09-12):
+  - OPeNDAP THREDDS (las.incois.gov.in): conditional point-query backup.
+    The first version loaded the entire array into RAM. The current adapter
+    requests a small spatial hyperslab and now requires a verifiable temporal
+    coordinate/date before returning a value. The forced audit in this runtime
+    returned a measured NetCDF I/O failure; that is not a global-liveness claim.
   - PFZ advisory:  a separate official GeoServer WFS adapter is wired
     pipeline/incois_pfz.py) — that's the INCOIS product fishers
     actually use daily.
   - ERDDAP (erddap.incois.gov.in):  NO chlorophyll dataset — AMSR-E SST
     (stale 2011), ASCAT winds, ARGO, OISST only.
 
-Nothing here is faked: if INCOIS OPeNDAP fails, the caller shows the
-real error and falls back to NOAA / OC-CCI / MOSDAC (creds) instead.
+Nothing here is fabricated: a transport, schema, temporal-match, or no-pixel
+failure is returned as unavailable with its measured reason.
 """
 from __future__ import annotations
 
@@ -28,7 +25,7 @@ import os
 from typing import Any
 
 
-# INCOIS OCM-2 OPeNDAP URL (flaky server — we only point-query it now)
+# INCOIS OCM-2 OPeNDAP URL; the adapter only performs bounded point queries.
 INCOIS_OPENDAP_BASE = (
     "http://las.incois.gov.in/thredds/id-b36be55868/"
     "data_home_las_datasets_oceancolour_Oceansat2-OCM.nc.jnl"
@@ -54,15 +51,21 @@ def _opendap_enabled() -> bool:
 def _try_opendap_chl(
     lat: float,
     lon: float,
+    target_date: str | None,
     timeout_sec: float = 12.0,
     box_deg: float = 0.3,
+    max_date_gap_days: int = 7,
 ) -> dict[str, Any] | None:
     """Point-query INCOIS OPeNDAP for chlorophyll near (lat, lon).
 
-    CRASH-SAFE by construction: we subset server-side with .sel() so
-    OPeNDAP transfers only the small hyperslab (~0.6° box ≈ a few KB),
-    never the multi-GB global grid. (The 2026-09-03 laptop crash was
-    `ds[var].values` on the FULL array — that code is deleted.)
+    The data variable must expose a decodable time coordinate. A requested
+    date is matched to the nearest available observation within
+    ``max_date_gap_days`` and the actual selected date is returned. Without
+    that evidence, the source remains unavailable rather than being labelled
+    with the requested date.
+
+    The spatial subset is selected before values are loaded, avoiding the old
+    full-array path.
 
     Hard-capped at timeout_sec via SIGALRM when on the main thread; in
     worker threads the caller's future timeout abandons us (the
@@ -107,6 +110,60 @@ def _try_opendap_chl(
             if lat_name not in ds.coords or lon_name not in ds.coords:
                 return {"error": "INCOIS dataset missing lat/lon coords", "source": SOURCE_LABEL}
 
+            variable = ds[var_name]
+            time_name = None
+            for dim in variable.dims:
+                coord = ds.coords.get(dim)
+                standard_name = str(getattr(coord, "attrs", {}).get("standard_name", "")).lower()
+                if dim.lower() in {"time", "date", "datetime"} or standard_name == "time":
+                    time_name = dim
+                    break
+            if time_name is None or time_name not in ds.coords:
+                return {
+                    "error": "INCOIS dataset has no verifiable time coordinate",
+                    "source": SOURCE_LABEL,
+                }
+
+            try:
+                time_values = np.asarray(ds.coords[time_name].values).astype("datetime64[ns]")
+                valid_indices = np.flatnonzero(~np.isnat(time_values))
+                if valid_indices.size == 0:
+                    raise ValueError("time coordinate is empty or undecodable")
+                valid_times = time_values[valid_indices]
+                if target_date:
+                    target = np.datetime64(target_date, "ns")
+                    deltas = np.abs(valid_times - target)
+                    relative_index = int(np.argmin(deltas))
+                    time_index = int(valid_indices[relative_index])
+                    gap_days = float(deltas[relative_index] / np.timedelta64(1, "D"))
+                    if gap_days > max_date_gap_days:
+                        return {
+                            "error": (
+                                f"INCOIS nearest observation is {gap_days:.1f} days from "
+                                f"requested date (limit {max_date_gap_days} days)"
+                            ),
+                            "source": SOURCE_LABEL,
+                        }
+                else:
+                    time_index = int(valid_indices[int(np.argmax(valid_times))])
+                actual_time = time_values[time_index]
+                actual_date = np.datetime_as_string(actual_time, unit="D")
+                variable = variable.isel({time_name: time_index})
+            except Exception as exc:  # noqa: BLE001
+                return {
+                    "error": f"INCOIS time coordinate could not be matched: {type(exc).__name__}: {exc}",
+                    "source": SOURCE_LABEL,
+                }
+
+            extra_dims = [d for d in variable.dims if d not in {lat_name, lon_name}]
+            for dim in extra_dims:
+                if variable.sizes.get(dim) != 1:
+                    return {
+                        "error": f"INCOIS chlorophyll has unsupported dimension {dim}",
+                        "source": SOURCE_LABEL,
+                    }
+                variable = variable.isel({dim: 0})
+
             # Respect coordinate direction (ascending vs descending) or
             # .sel() with a (lo, hi) slice returns an EMPTY selection.
             lat_vals = ds.coords[lat_name].values
@@ -119,7 +176,7 @@ def _try_opendap_chl(
                          else slice(lon - box_deg, lon + box_deg))
 
             # THE SAFE SUBSET — OPeNDAP hyperslab, KBs on the wire.
-            subset = ds[var_name].sel({lat_name: lat_slice, lon_name: lon_slice})
+            subset = variable.sel({lat_name: lat_slice, lon_name: lon_slice})
             arr = np.asarray(subset.values, dtype="float64").ravel()
             arr = arr[np.isfinite(arr)]
             if arr.size == 0:
@@ -134,15 +191,18 @@ def _try_opendap_chl(
                 "lat": lat,
                 "lon": lon,
                 "box_deg": box_deg,
+                "date": actual_date,
                 "source": "INCOIS OCM-2 (OPeNDAP point subset)",
-                "note": f"safe hyperslab ~{2 * box_deg:.1f}° box, {arr.size} cells — "
-                        "not the full global grid",
+                "note": (
+                    f"spatial hyperslab ~{2 * box_deg:.1f}° box, {arr.size} cells; "
+                    f"selected observation date {actual_date}"
+                ),
             }
     except _Timeout as e:
         return {"error": str(e), "source": SOURCE_LABEL}
     except Exception as e:  # noqa: BLE001
         return {
-            "error": f"INCOIS OPeNDAP: {type(e).__name__}: {str(e)[:100]}",
+            "error": f"INCOIS OPeNDAP: {type(e).__name__}: {str(e)[:300]}",
             "source": SOURCE_LABEL,
         }
     finally:
@@ -154,34 +214,32 @@ def _try_opendap_chl(
 def get_chlorophyll(
     lat: float,
     lon: float,
-    date: str | None = "2026-08-15",
+    date: str | None = None,
     timeout_sec: float = 12.0,
 ) -> dict[str, Any] | None:
     """Chlorophyll from INCOIS — safe point-query, backup role.
 
-    Called ONLY when NOAA ERDDAP and ESA OC-CCI both failed (the caller,
-    pipeline/orca_data.py, decides). Returns an honest error dict when
-    the flaky server doesn't answer — we never invent a value.
-    `date` is accepted for interface parity; the OCM-2 OPeNDAP archive
-    is effectively a climatological grid, so the returned value is a
-    spatial mean around the point, flagged in `note`.
+    Called only when NOAA ERDDAP and ESA OC-CCI both failed (the caller,
+    pipeline/orca_data.py, decides). Returns an error dict for transport,
+    schema, temporal-match, or no-valid-cell failure. ``date`` is used for a
+    bounded nearest-time match, and the actual selected date is returned.
     """
     if not _opendap_enabled():
         return {
             "error": "INCOIS OPeNDAP disabled via ORCA_INCOIS_OPENDAP=0",
             "source": SOURCE_LABEL,
         }
-    return _try_opendap_chl(lat, lon, timeout_sec=timeout_sec)
+    return _try_opendap_chl(lat, lon, date, timeout_sec=timeout_sec)
 
 
 def get_sst(
     lat: float,
     lon: float,
-    date: str | None = "2026-08-15",
+    date: str | None = None,
 ) -> dict[str, Any] | None:
-    """INCOIS doesn't expose machine-readable SST. Use Open-Meteo instead."""
+    """SST is not implemented by this INCOIS adapter."""
     return {
-        "error": "INCOIS SST endpoint not available. Use Open-Meteo Marine.",
+        "error": "INCOIS SST is not implemented in the current ORCA adapter",
         "source": SOURCE_LABEL,
         "alternative": "https://open-meteo.com/",
     }
@@ -199,10 +257,8 @@ def status() -> dict[str, Any]:
         "erddap_datasets": "15 griddap datasets, none for chlorophyll",
         "pfz_url": INCOIS_PFZ_URL,
         "pfz_note": "PFZ lines use the INCOIS GeoServer WFS adapter (pipeline/incois_pfz.py); availability is checked per request",
-        "recommendation": (
-            "Primary chlorophyll: NOAA ERDDAP (global NRT). Cross-check: ESA OC-CCI. "
-            "Indian Ocean 🇮🇳: MOSDAC OCM-3 with credentials. INCOIS OPeNDAP stays a "
-            "safe point-subset backup (server itself is flaky); the WORKING INCOIS "
-            "product we rely on is the daily official PFZ WFS feed."
+        "role": (
+            "Conditional chlorophyll point-subset backup after NOAA and OC-CCI; "
+            "official PFZ WFS availability is reported separately per request."
         ),
     }

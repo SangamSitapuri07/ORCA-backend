@@ -197,6 +197,9 @@ def test_reasoner_full_pipeline():
     assert "summary" in out
     assert "recommendation" in out
     assert len(out["agents"]) == 11
+    assert out["data_coverage"]["scope"] == "analytical_agents"
+    assert out["data_coverage"]["known_stages"] == out["data_coverage"]["known"]
+    assert out["data_coverage"]["total_stages"] == out["data_coverage"]["total"]
     agent_names = [a["agent"] for a in out["agents"]]
     assert "ocean" in agent_names
     assert "satellite" in agent_names

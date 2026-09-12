@@ -70,8 +70,11 @@ def reason(
     overall = _max_risk(known_risks) if known_risks else "unknown"
 
     data_coverage = {
-        "known": len(known_risks),
+        "scope": "analytical_agents",
+        "known": len(known_risks),  # backward-compatible aliases
         "total": len(env_agents),
+        "known_stages": len(known_risks),
+        "total_stages": len(env_agents),
         "sources_failed": len(snap.get("data_sources_failed", [])),
     }
     limited = data_coverage["known"] < data_coverage["total"]
@@ -173,5 +176,6 @@ def reason(
         },
         "data_sources_used": snap.get("data_sources_used", []),
         "data_sources_failed": snap.get("data_sources_failed", []),
+        "data_sources_skipped": snap.get("data_sources_skipped", []),
         "fetched_at": snap.get("fetched_at"),
     }

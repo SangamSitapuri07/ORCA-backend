@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import '../../../../core/cache/cache_service.dart';
 import '../../../../core/cache/staleness.dart';
+import '../../../../core/network/dio_failure_mapper.dart';
 import '../../../../core/result/app_failure.dart';
 import '../../../../core/result/result.dart';
 import '../../domain/entities/advisory.dart';
@@ -31,10 +32,11 @@ class AdvisoryRepositoryImpl implements AdvisoryRepository {
     // 1. If not forcing refresh and cache is fresh, emit cached
     if (!forceRefresh && cached != null && !cached.isExpired) {
       final dto = AdvisoryDto.fromJson(cached.data);
-      return Result.ok(dto.toEntity(cached.staleness));
+      final observedAt = dto.parsedSourceTimestamp ?? cached.fetchedAt;
+      return Result.ok(dto.toEntity(StalenessInfo.fromDateTime(observedAt)));
     }
 
-    // 2. Fetch live data
+    // 2. Fetch the current backend response
     try {
       final dto = await _remoteDataSource.getAdvisory(lat: lat, lon: lon);
 
@@ -59,27 +61,23 @@ class AdvisoryRepositoryImpl implements AdvisoryRepository {
       };
       await _cacheService.put(cacheKey, jsonMap);
 
-      final freshStaleness = StalenessInfo.fromDateTime(DateTime.now());
-      return Result.ok(dto.toEntity(freshStaleness));
+      return Result.ok(
+        dto.toEntity(StalenessInfo.fromDateTime(dto.sourceTimestamp)),
+      );
     } on DioException catch (dioErr) {
       // 3. Network error -> Fall back to cache if present with honest staleness
       if (cached != null) {
         final dto = AdvisoryDto.fromJson(cached.data);
-        return Result.ok(dto.toEntity(cached.staleness));
+        final observedAt = dto.parsedSourceTimestamp ?? cached.fetchedAt;
+        return Result.ok(dto.toEntity(StalenessInfo.fromDateTime(observedAt)));
       }
 
-      if (dioErr.type == DioExceptionType.connectionTimeout ||
-          dioErr.type == DioExceptionType.receiveTimeout) {
-        return const Result.err(AppFailure.timeout());
-      }
-      if (dioErr.type == DioExceptionType.connectionError) {
-        return const Result.err(AppFailure.serverDown());
-      }
-      return Result.err(AppFailure.unknown(dioErr.message ?? 'Network error'));
+      return Result.err(mapDioFailure(dioErr));
     } catch (e) {
       if (cached != null) {
         final dto = AdvisoryDto.fromJson(cached.data);
-        return Result.ok(dto.toEntity(cached.staleness));
+        final observedAt = dto.parsedSourceTimestamp ?? cached.fetchedAt;
+        return Result.ok(dto.toEntity(StalenessInfo.fromDateTime(observedAt)));
       }
       return Result.err(AppFailure.unknown(e.toString()));
     }

@@ -97,37 +97,34 @@ def get_chlorophyll(
 def _query_occci(lat: float, lon: float) -> dict[str, Any]:
     """Try progressively WIDER boxes until a cloud-free cell is found.
 
-    Ocean-colour satellites cannot see through clouds — during the Indian
-    monsoon the tiny 0.05° box around the user's point is often fully
-    cloud-masked (all pixels null) even though the server is perfectly
-    healthy. Widening to 0.25° then 0.75° usually finds a clear pixel
-    nearby; we report the real box used and the cell distance, never a
-    fake "at your point" claim.
+    A tiny query may contain only null product pixels because of masking,
+    quality filtering, coverage, or other product conditions. The response
+    alone does not identify the cause. Widening to 0.25° then 0.75° may find a
+    valid nearby cell; the returned box and cell distance remain explicit.
     """
     last_no_data: dict[str, Any] | None = None
     for radius in (0.05, 0.25, 0.75):
         res = _box_query(lat, lon, radius)
-        if res.get("error") and not res.get("error_cloudmask"):
-            # Server-side failure (slow/down) — retrying with a BIGGER
-            # box only punishes an already-struggling public server.
+        if res.get("error") and not res.get("no_valid_pixels"):
+            # Transport/protocol failure: changing the spatial box cannot
+            # resolve it, so retain the exact failure instead of guessing.
             return res
         if res.get("value") is not None:
             if radius > 0.05:
                 res["note"] = (
-                    f"±0.05° box was fully cloud-masked; using nearest clear "
-                    f"cell in a ±{radius}° box instead ({res.get('distance_deg')}° away)."
+                    f"±0.05° box had no valid chlor_a pixel; using the nearest "
+                    f"valid cell in a ±{radius}° box ({res.get('distance_deg')}° away)."
                 )
             return res
-        last_no_data = res  # answered, but every pixel was null (clouds)
+        last_no_data = res  # request answered, but every returned value was null
     return last_no_data or {
-        "error": "OC-CCI cross-check: no valid values (NOAA primary is used)",
+        "error": "OC-CCI comparison returned no valid chlor_a values",
         "source": SOURCE_LABEL,
     }
 
 
 def _box_query(lat: float, lon: float, radius_deg: float) -> dict[str, Any]:
-    """One OC-CCI .json box query. Returns a value dict, a no-value dict
-    (cloud-masked box), or an error dict."""
+    """Return a value, an explicit no-valid-pixel result, or an error."""
     # Percent-encode the square brackets: Python's urllib sends them RAW
     # (unlike curl), and this server 400s on raw brackets. (Found after
     # a live side-by-side: curl %5B = 200, urllib raw [ = HTTP 400.)
@@ -138,15 +135,17 @@ def _box_query(lat: float, lon: float, radius_deg: float) -> dict[str, Any]:
         f"%5B({lon - radius_deg:.4f}):1:({lon + radius_deg:.4f})%5D"
     )
     try:
-        # 22 s: this shared public ERDDAP often needs 20-55 s; the job is
-        # capped at 25 s by the parallel gather, so size the socket just
-        # under that. Old 8 s cap killed nearly every attempt from India.
+        # Keep the socket timeout just below the parallel job's 25-second cap
+        # so the adapter can return its own measured transport error first.
         req = urllib.request.Request(url, headers={"User-Agent": "ORCA/1.0"})
         with urllib.request.urlopen(req, timeout=22) as r:
             data = json.loads(r.read().decode("utf-8"))
         rows = data.get("table", {}).get("rows", [])
         if not rows:
-            return {"error": "OC-CCI cross-check unavailable (empty response — server busy) — NOAA primary is used", "source": SOURCE_LABEL}
+            return {
+                "error": "OC-CCI comparison returned an empty ERDDAP table",
+                "source": SOURCE_LABEL,
+            }
 
         # Find nearest cell with a valid value
         nearest = None
@@ -171,20 +170,22 @@ def _box_query(lat: float, lon: float, radius_deg: float) -> dict[str, Any]:
                 nearest_dist = d
                 nearest = v
         if nearest is None:
-            # Answered fine — the box is just fully cloud-masked today.
             return {
                 "value": None,
                 "n_samples": 0,
                 "lat": lat,
                 "lon": lon,
                 "source": SOURCE_LABEL,
-                "date": (actual_time or "latest")[:10],
-                "error_cloudmask": True,
+                "no_valid_pixels": True,
                 "error": (
-                    f"OC-CCI: all pixels within ±0.75° are cloud-masked today "
-                    f"(monsoon cover — satellites can't see through clouds). "
-                    f"NOAA primary is used."[:180]
+                    "OC-CCI returned only null chlor_a pixels in the queried "
+                    "box; masking/coverage cause is not identified by this response"
                 ),
+            }
+        if not actual_time:
+            return {
+                "error": "OC-CCI value returned without an observation time",
+                "source": SOURCE_LABEL,
             }
         return {
             "value": nearest,
@@ -197,14 +198,11 @@ def _box_query(lat: float, lon: float, radius_deg: float) -> dict[str, Any]:
             "box_used_deg": radius_deg,
             "distance_deg": round(nearest_dist, 4),
             "source": SOURCE_LABEL,
-            "date": (actual_time or "latest")[:10],
+            "date": str(actual_time)[:10],
             "log10": math.log10(nearest) if nearest > 0 else None,
         }
     except Exception as e:  # noqa: BLE001
-        # The comet.nefsc ERDDAP is shared by the whole world and often
-        # needs ~54 s — say so plainly instead of a naked TimeoutError.
-        why = "server slow" if "timed out" in str(e).lower() or "Timeout" in type(e).__name__ else f"{type(e).__name__}: {e}"
         return {
-            "error": f"OC-CCI cross-check unavailable ({why}) — NOAA primary is used"[:180],
+            "error": f"OC-CCI comparison failed ({type(e).__name__}: {e})"[:180],
             "source": SOURCE_LABEL,
         }

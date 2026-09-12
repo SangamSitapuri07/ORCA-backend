@@ -117,29 +117,22 @@ class AppLocalizationsEn extends AppLocalizations {
   String get probeFishingEffort => 'Fishing Effort';
 
   @override
-  String get aiAgentsTitle => 'Collaborative Multi-Agent System';
+  String get aiAgentsTitle => '11-Stage Collaborative Analysis';
 
   @override
-  String get aiRunAnalysis => 'Run 10-Agent Analysis';
+  String get aiRunAnalysis => 'Run 11-Stage Analysis';
 
   @override
   String get aiRunning => 'Agents collaborating...';
 
   @override
-  String get aiCollaborationTrace => 'Live Agent Collaboration Trace';
+  String get aiCollaborationTrace => 'Backend Agent Trace';
 
   @override
   String get aiOrchestrationSynthesis => 'Orchestrator Synthesis';
 
-  @override
-  String get aiChatTitle => 'Marine Advisory Assistant';
 
-  @override
-  String get aiChatUnavailable =>
-      'Ollama LLM chat is currently paused by design choice to conserve edge resources.';
 
-  @override
-  String get aiChatInputHint => 'Ask about ocean conditions...';
 
   @override
   String get alertsTitle => 'Active Marine Alerts';
@@ -222,5 +215,5 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get offlineBanner =>
-      'You are offline. Showing last verified cached advisory.';
+      'You are offline. Showing the cached advisory with its original time, if available.';
 }

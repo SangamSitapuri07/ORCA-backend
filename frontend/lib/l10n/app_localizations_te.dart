@@ -117,29 +117,22 @@ class AppLocalizationsTe extends AppLocalizations {
   String get probeFishingEffort => 'చేపల వేట కార్యకలాపాలు';
 
   @override
-  String get aiAgentsTitle => '10-ఏజెంట్ల సమన్వయ వ్యవస్థ';
+  String get aiAgentsTitle => '11-దశల సమన్వయ వ్యవస్థ';
 
   @override
-  String get aiRunAnalysis => '10-ఏజెంట్ విశ్లేషణ ప్రారంభించు';
+  String get aiRunAnalysis => '11-దశల విశ్లేషణ ప్రారంభించు';
 
   @override
   String get aiRunning => 'ఏజెంట్లు విశ్లేషిస్తున్నారు...';
 
   @override
-  String get aiCollaborationTrace => 'ఏజెంట్ సమన్వయ లైవ్ ట్రేస్';
+  String get aiCollaborationTrace => 'బ్యాకెండ్ ఏజెంట్ ట్రేస్';
 
   @override
   String get aiOrchestrationSynthesis => 'తుది నిర్ణయం మరియు ముగింపు';
 
-  @override
-  String get aiChatTitle => 'సముద్ర సలహాదారు సహాయకుడు';
 
-  @override
-  String get aiChatUnavailable =>
-      'ఎడ్జ్ సర్వర్ వనరులను ఆదా చేయడానికి చాట్ ప్రస్తుతం తాత్కాలికంగా నిలిపివేయబడింది.';
 
-  @override
-  String get aiChatInputHint => 'సముద్ర వాతావరణం గురించి అడగండి...';
 
   @override
   String get alertsTitle => 'సక్రియ హెచ్చరికలు';
@@ -224,5 +217,5 @@ class AppLocalizationsTe extends AppLocalizations {
 
   @override
   String get offlineBanner =>
-      'మీరు ఆఫ్‌లైన్‌లో ఉన్నారు. చివరి ధృవీకరించిన సలహా చూపబడుతోంది.';
+      'మీరు ఆఫ్‌లైన్‌లో ఉన్నారు. అందుబాటులో ఉంటే, క్యాష్ చేసిన సలహా దాని అసలు సమయంతో చూపబడుతోంది.';
 }

@@ -23,7 +23,7 @@ class HistoryScreen extends StatelessWidget {
               Text('Cloud history unavailable', style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold, color: Colors.white)),
               SizedBox(height: 8),
               Text(
-                'No durable Supabase history implementation is connected. Live advisories and honest on-device cache fallback continue to work.',
+                'No durable Supabase history implementation is connected. Core advisory requests and on-device cache fallback remain independent of cloud history.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: OrcaTheme.textSecondary, height: 1.4),
               ),

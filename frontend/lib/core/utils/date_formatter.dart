@@ -10,6 +10,12 @@ class DateFormatter {
     return '${formatter.format(ist)} IST';
   }
 
+  /// Formats UTC/Local timestamp with calendar date in IST.
+  static String formatIstDateTime(DateTime dateTime) {
+    final ist = dateTime.toUtc().add(const Duration(hours: 5, minutes: 30));
+    return '${DateFormat('dd MMM yyyy, HH:mm').format(ist)} IST';
+  }
+
   /// Parses ISO8601 string safely.
   static DateTime? parseIso(dynamic value) {
     if (value == null) return null;

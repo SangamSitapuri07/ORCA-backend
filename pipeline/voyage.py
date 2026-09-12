@@ -223,7 +223,7 @@ def _spread(recs: list[dict[str, Any]], notes: list[str]) -> None:
 
     # B15: burst-pause precheck — if GFW already told us to wait, DO NOT
     # fire any HTTP at all; only the remembered cell pressure may answer.
-    # (One angry burst window must not be hammered by 3 fresh calls.)
+    # (One active HTTP 429 window must not be hit by three fresh calls.)
     try:
         from pipeline import gfw as _gfw_mod
         _paused = float(_gfw_mod._rate_limit_remaining())

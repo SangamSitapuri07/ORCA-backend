@@ -47,7 +47,7 @@ def _fetch_baseline(lat: float, lon: float, target_date: str, window_years: int 
             print("[Anomaly] baseline time budget exhausted — using partial data", file=sys.stderr)
             break
         if consecutive_failures >= 2:
-            print("[Anomaly] archive failing repeatedly — giving up early", file=sys.stderr)
+            print("[Anomaly] archive attempts failed in this run — stopping early", file=sys.stderr)
             break
         try:
             past = target.replace(year=target.year - years_ago)

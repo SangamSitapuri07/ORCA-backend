@@ -2,7 +2,7 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from pipeline import orca_data
+from pipeline import forecast, orca_data
 
 
 def _mock_all(**overrides):
@@ -27,6 +27,10 @@ def _mock_all(**overrides):
     orca_data._get_gfw_fleet = lambda: overrides.get(
         "gfw_fleet", lambda *a, **kw: {"error": "mock", "source": "GFW"}
     )
+    forecast.get_point_forecast = overrides.get(
+        "forecast",
+        lambda *a, **kw: {"source": "Open-Meteo test stub", "now": {}, "next48h": {}},
+    )
     # Silent warmers (ERA5 baseline + today's weather) — stubbed so the
     # offline suite never touches the real archive/weather endpoints.
     # Their results are NOT snapshot fields, so the used/failed source
@@ -39,6 +43,28 @@ def _mock_all(**overrides):
     )
 
 
+def test_safe_rejects_error_payload_with_diagnostic_fields():
+    """An upstream error remains a failure even when it includes source/details."""
+    result, error = orca_data._safe(
+        lambda: {"error": "TLS EOF", "details": "handshake ended", "source": "Open-Meteo"},
+        label="Open-Meteo",
+    )
+    assert result is None
+    assert error == "Open-Meteo: TLS EOF"
+
+
+def test_gather_rejects_error_payload_with_diagnostic_fields():
+    result = orca_data._gather({
+        "openmeteo": (
+            lambda: {"error": "HTTP 503", "details": "upstream", "source": "Open-Meteo"},
+            (),
+            {},
+            "Open-Meteo",
+        ),
+    })
+    assert result["openmeteo"] == (None, "Open-Meteo: HTTP 503")
+
+
 def test_zone_snapshot_offline():
     """All 6 sources fail gracefully, snapshot still returned with errors listed."""
     _mock_all()
@@ -47,8 +73,8 @@ def test_zone_snapshot_offline():
     assert snap["lon"] == 72.8
     assert snap["date"] == "2026-08-15"
     assert "data_sources_failed" in snap
-    # 5 sources: Open-Meteo, NOAA, OC-CCI, INCOIS, GFW-effort, GFW-fleet = 6
-    assert len(snap["data_sources_failed"]) == 6
+    # Six primary jobs plus the separate point-wave forecast are disclosed.
+    assert len(snap["data_sources_failed"]) == 7
     assert "data_sources_used" in snap
     assert len(snap["data_sources_used"]) == 0
     assert "fetched_at" in snap
@@ -68,8 +94,9 @@ def test_zone_snapshot_partial():
     assert snap["sst_max"] == 29.6
     assert snap["sst_mean"] == 29.0
     assert snap["wave_max"] == 2.86
-    assert "Open-Meteo Marine (SST + waves)" in snap["data_sources_used"]
-    assert len(snap["data_sources_failed"]) == 5
+    assert "Open-Meteo Marine (SST/wave history, 2026-07-12 to 2026-08-11)" in snap["data_sources_used"]
+    assert len(snap["data_sources_failed"]) == 6
+    assert snap["observation_metadata"]["sea_temp_c"]["observed_to"] == "2026-08-11"
     assert "pfz_score" not in snap
     print("✅ test_zone_snapshot_partial passed (no synthetic PFZ score)")
 
@@ -88,6 +115,11 @@ def test_zone_snapshot_full():
         gfw_fleet=lambda *a, **kw: {
             "vessel_count": 5, "by_flag": {"IND": 3, "LKA": 2}, "by_gear": {"trawler": 3, "gillnetter": 2},
         },
+        forecast=lambda *a, **kw: {
+            "source": "Open-Meteo Marine test model",
+            "now": {"time": "2026-08-15T12:00Z", "wave_height_m": 1.2},
+            "next48h": {"wave_max_m": 1.8},
+        },
     )
     snap = orca_data.zone_snapshot(19.0, 72.8, "2026-08-15", include_gfw=True)
     assert snap["chlorophyll"] == 1.5
@@ -100,6 +132,16 @@ def test_zone_snapshot_full():
     assert snap["fishing_window_start"] == "2026-07-12"
     assert snap["fishing_window_end"] == "2026-08-11"
     assert snap["fishing_bbox_radius_deg"] == 0.5
+    metadata = snap["observation_metadata"]
+    for field in ("sst_max", "sst_min", "sst_mean", "wave_max", "wave_mean"):
+        assert metadata[field]["source"]
+        assert metadata[field]["observed_from"] == "2026-07-12"
+        assert metadata[field]["observed_to"] == "2026-08-11"
+    assert metadata["chlorophyll_mg_m3"]["source"].startswith("NOAA")
+    assert metadata["fishing_effort_hours"]["observed_from"] == "2026-07-12"
+    assert metadata["vessel_count"]["observed_to"] == "2026-08-11"
+    assert metadata["wave_height_m"]["observed_at"] == "2026-08-15T12:00Z"
+    assert metadata["wave_peak_48h_m"]["valid_period"] == "Next 48 hours"
     assert "pfz_score" not in snap
     print("✅ test_zone_snapshot_full passed (GFW window retained; no synthetic PFZ score)")
 
@@ -110,13 +152,144 @@ def test_zone_snapshot_incois_fallback():
         noaa=lambda *a, **kw: {"error": "mock"},
         incois=lambda *a, **kw: {
             "value": 0.8, "units": "mg m^-3", "source": "INCOIS LAS",
+            "date": "2026-08-14",
         },
     )
     snap = orca_data.zone_snapshot(19.0, 72.8, "2026-08-15", include_gfw=False)
     assert snap["chlorophyll"] == 0.8
     assert snap["chlorophyll_source"].startswith("INCOIS")
+    assert snap["chlorophyll_date"] == "2026-08-14"
+    assert snap["observation_metadata"]["chlorophyll"]["observed_at"] == "2026-08-14"
     assert "INCOIS LAS (backup chlorophyll)" in snap["data_sources_used"]
     print("✅ test_zone_snapshot_incois_fallback passed")
+
+
+def test_occci_selected_source_discloses_observation_date():
+    """OC-CCI may supply chlorophyll when NOAA has no value, with its date."""
+    _mock_all(
+        noaa=lambda *a, **kw: {"error": "no valid NOAA pixel"},
+        occci=lambda *a, **kw: {
+            "value": 0.42,
+            "units": "mg m^-3",
+            "source": "ESA OC-CCI v6",
+            "date": "2026-08-14",
+        },
+    )
+    snap = orca_data.zone_snapshot(19.0, 72.8, "2026-08-15", include_gfw=False)
+    assert snap["chlorophyll"] == 0.42
+    assert snap["chlorophyll_source"] == "ESA OC-CCI v6"
+    assert snap["chlorophyll_date"] == "2026-08-14"
+    assert "observation (2026-08-14)" in snap["chlorophyll_note"]
+    assert "selected chlorophyll source" in snap["data_sources_used"][-1]
+    assert "GFW: excluded by include_gfw=false" in snap["data_sources_skipped"]
+    assert not any("GFW" in failure for failure in snap["data_sources_failed"])
+    assert snap["observation_metadata"]["chlorophyll_mg_m3"]["observed_at"] == "2026-08-14"
+
+
+def test_occci_selected_stale_source_discloses_age():
+    """A selected cached OC-CCI value must never be presented as current."""
+    _mock_all(
+        noaa=lambda *a, **kw: {"error": "no valid NOAA pixel"},
+        occci=lambda *a, **kw: {
+            "value": 0.39,
+            "units": "mg m^-3",
+            "source": "ESA OC-CCI v6",
+            "date": "2026-08-13",
+            "_stale": True,
+            "_stale_age_sec": 780,
+        },
+    )
+    snap = orca_data.zone_snapshot(19.0, 72.8, "2026-08-15", include_gfw=False)
+    assert snap["chlorophyll"] == 0.39
+    assert "cached ESA OC-CCI reading from 13 min ago" in snap["chlorophyll_note"]
+    assert "observation 2026-08-13" in snap["chlorophyll_note"]
+    assert "cached 13m old" in snap["data_sources_used"][-1]
+    assert any("current request returned no usable value" in failure
+               for failure in snap["data_sources_failed"])
+
+
+def test_occci_last_known_good_retains_current_failure():
+    """Serving dated cache evidence must not hide the measured failed request."""
+    from pipeline import ttlcache
+
+    ttlcache.clear()
+    try:
+        ttlcache.remember_last_good("occci:19.0:72.8", {
+            "value": 0.36,
+            "units": "mg m^-3",
+            "source": "ESA OC-CCI v6",
+            "date": "2026-08-13",
+        })
+        _mock_all(
+            noaa=lambda *a, **kw: {"error": "NOAA transport failed"},
+            occci=lambda *a, **kw: {"error": "OC-CCI HTTP 503"},
+        )
+        snap = orca_data.zone_snapshot(
+            19.0, 72.8, "2026-08-15", include_gfw=False,
+        )
+        assert snap["chlorophyll"] == 0.36
+        assert snap["chlorophyll_date"] == "2026-08-13"
+        assert any("OC-CCI HTTP 503" in failure
+                   for failure in snap["data_sources_failed"])
+        assert "cached" in snap["chlorophyll_note"].lower()
+        assert snap["observation_metadata"]["chlorophyll"]["observed_at"] == "2026-08-13"
+    finally:
+        ttlcache.clear()
+
+
+def test_occci_undated_last_known_good_is_rejected():
+    """An undated cached number cannot become an observation."""
+    from pipeline import ttlcache
+
+    ttlcache.clear()
+    try:
+        ttlcache.remember_last_good("occci:19.0:72.8", {
+            "value": 0.36,
+            "source": "ESA OC-CCI v6",
+        })
+        _mock_all(
+            noaa=lambda *a, **kw: {"error": "NOAA unavailable"},
+            occci=lambda *a, **kw: {"error": "OC-CCI unavailable"},
+            incois=lambda *a, **kw: {"error": "INCOIS unavailable"},
+        )
+        snap = orca_data.zone_snapshot(
+            19.0, 72.8, "2026-08-15", include_gfw=False,
+        )
+        assert "chlorophyll" not in snap
+    finally:
+        ttlcache.clear()
+
+
+def test_gfw_metadata_uses_provider_returned_window():
+    """GFW numbers expose the provider's actual clamped window, not a guess."""
+    _mock_all(
+        gfw_effort=lambda *a, **kw: {
+            "hours": 12.5,
+            "vessel_ids": 3,
+            "start_date": "2026-07-10",
+            "end_date": "2026-08-09",
+            "source": "Global Fishing Watch test report",
+        },
+        gfw_fleet=lambda *a, **kw: {
+            "vessel_count": 3,
+            "by_flag": {"IND": 3},
+            "by_gear": {},
+            "start_date": "2026-07-10",
+            "end_date": "2026-08-09",
+            "source": "Global Fishing Watch test grouping",
+        },
+    )
+    snap = orca_data.zone_snapshot(
+        19.0, 72.8, "2026-08-15", include_gfw=True,
+    )
+    assert snap["fishing_window_start"] == "2026-07-10"
+    assert snap["fishing_window_end"] == "2026-08-09"
+    effort_meta = snap["observation_metadata"]["fishing_hours"]
+    fleet_meta = snap["observation_metadata"]["vessel_count"]
+    assert effort_meta["observed_from"] == "2026-07-10"
+    assert effort_meta["observed_to"] == "2026-08-09"
+    assert effort_meta["source"] == "Global Fishing Watch test report"
+    assert fleet_meta["source"] == "Global Fishing Watch test grouping"
 
 
 def test_grid_snapshot_offline():
@@ -168,7 +341,7 @@ def test_noaa_lag_analysis_from_parallel_job():
     assert snap["chlorophyll"] == 0.7
     assert snap["chlorophyll_source"].startswith("NOAA")
     assert snap["chlorophyll_date"] == "2026-08-12"
-    assert "satellite lag" in snap["chlorophyll_note"]
+    assert "2026-08-12 observation" in snap["chlorophyll_note"]
     print("✅ 3-day-lag chlorophyll arrives via the parallel job")
 
 

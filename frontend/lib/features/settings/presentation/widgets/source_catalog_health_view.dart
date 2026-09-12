@@ -21,9 +21,9 @@ class SourceCatalogHealthView extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Text(
-              '14 DATA SOURCES (CONFIGURATION STATUS)',
-              style: TextStyle(
+            Text(
+              '${SourceCatalog.all.length} DATA SOURCES (CONFIGURATION STATUS)',
+              style: const TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w800,
                 color: OrcaTheme.textSecondary,
@@ -31,7 +31,7 @@ class SourceCatalogHealthView extends StatelessWidget {
               ),
             ),
             Text(
-              '${liveSources.length}/14 reported',
+              '${liveSources.length}/${SourceCatalog.all.length} reported',
               style: const TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.bold,
@@ -162,8 +162,6 @@ class SourceCatalogHealthView extends StatelessWidget {
       case 'available':
       case 'configured':
         return VerdictColors.info;
-      case 'cloud_masked':
-      case 'flaky':
       case 'degraded':
         return VerdictColors.caution;
       case 'offline':

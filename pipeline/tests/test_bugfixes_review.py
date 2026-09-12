@@ -1,8 +1,8 @@
 """Regression tests for the 2026-09-04 screenshot-review bug batch.
 
 Bug #3: Satellite tag followed the CROSS-CHECK source's success instead of
-        the primary (NOAA) measurement — cloud-masked OC-CCI flipped the
-        chip to "no data" while real chlorophyll was displayed.
+        the selected chlorophyll measurement—an empty OC-CCI comparison
+        flipped the chip to "no data" while a measured value was displayed.
 Bug #2: Marine Risk quoted a 2.5 m+ rough-seas warning yet concluded
         "low" because wave_caution weighed only 1 (threshold is 2).
 Bug #1: Gale-force gusts next to a "calm" sustained reading never

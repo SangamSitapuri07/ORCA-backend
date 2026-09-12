@@ -57,8 +57,8 @@ class HealthNotifier extends StateNotifier<AsyncValue<SystemHealthSnapshot>> {
       if (response.data == null) throw const FormatException('Empty health response');
       state = AsyncValue.data(_parseHealth(response.data!));
     } catch (error, stack) {
-      // Never replace a failed live health check with a healthy-looking fixture.
-      state = AsyncValue.error('ORCA Box server unreachable: $error', stack);
+      // Never replace a failed ORCA Box health request with a healthy fixture.
+      state = AsyncValue.error('ORCA Box health request failed: $error', stack);
     }
   }
 

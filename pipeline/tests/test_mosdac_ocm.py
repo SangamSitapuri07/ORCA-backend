@@ -110,7 +110,7 @@ def test_live_chain_honest_when_no_granule(monkeypatch):
     monkeypatch.setattr(mosdac_auth, "search", lambda *a, **k: {"totalResults": 0, "records": []})
     res = mosdac_ocm._live_chain(20.9, 70.37)
     assert res.get("value") is None
-    assert "live fetch failed" in res["error"]
+    assert "comparison failed" in res["error"]
     assert "no E06OCM_L2C_LAC_OC granule" in res["error"]
 
 
@@ -119,7 +119,7 @@ def test_live_chain_honest_when_pixel_missing(monkeypatch):
     res = mosdac_ocm._live_chain(20.9, 70.37)
     assert res.get("value") is None
     assert "no valid pixel" in res["error"]
-    assert "NOAA primary" in res["error"]
+    assert "NOAA" not in res["error"]
 
 
 def test_live_chain_login_error_is_honest(monkeypatch):
@@ -444,7 +444,7 @@ def test_failed_chain_cached_briefly_retry_not_repaid(monkeypatch, tmp_path):
 
     def _boom(lat, lon):
         calls.append(1)
-        return {"error": "MOSDAC OCM-3 live fetch failed (download too slow)",
+        return {"error": "MOSDAC OCM-3 comparison failed (download budget exceeded)",
                 "source": mosdac_ocm.SOURCE_LABEL}
 
     monkeypatch.setattr(mosdac_ocm, "_live_chain", _boom)
@@ -493,8 +493,8 @@ def test_fail_message_never_cuts_mid_word():
     )
     msg = _fail_message(why)
     assert len(msg) <= 260
-    assert msg.endswith(") — NOAA primary is used")
-    body = msg[len("MOSDAC OCM-3 live fetch failed ("):-len(") — NOAA primary is used")]
+    assert msg.endswith(")")
+    body = msg[len("MOSDAC OCM-3 comparison failed ("):-1]
     assert not body.endswith("no v"), msg
     assert body.endswith("+more") or body.endswith("…") or body.endswith("point]") or body.endswith("point"), msg
     # full first candidate stays intact
@@ -504,7 +504,7 @@ def test_fail_message_never_cuts_mid_word():
 def test_fail_message_short_passthrough():
     from pipeline.mosdac_ocm import _fail_message
     msg = _fail_message("login failed: HTTP 401")
-    assert msg == "MOSDAC OCM-3 live fetch failed (login failed: HTTP 401) — NOAA primary is used"
+    assert msg == "MOSDAC OCM-3 comparison failed (login failed: HTTP 401)"
 
 
 def test_boundbox_contains_comma_format():

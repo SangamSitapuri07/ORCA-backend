@@ -13,7 +13,7 @@ import '../providers/map_provider.dart';
 import '../widgets/layer_selector_dialog.dart';
 import '../widgets/probe_bottom_sheet.dart';
 
-/// Interactive Ocean Map Screen with Tap Probe and Live Data Layers (§8).
+/// Interactive ocean map with backend point probes and data layers (§8).
 class MapScreen extends ConsumerStatefulWidget {
   const MapScreen({super.key});
 
@@ -77,7 +77,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     return Scaffold(
       appBar: OrcaAppBar(
         title: 'OCEAN MAP & PROBE',
-        subtitle: 'Tap ocean to probe live conditions',
+        subtitle: 'Tap ocean for the latest available data',
         actions: [
           IconButton(
             icon: const Icon(Icons.layers_outlined, color: OrcaTheme.textPrimary),

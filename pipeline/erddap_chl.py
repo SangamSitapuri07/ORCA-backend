@@ -254,7 +254,7 @@ def get_chlorophyll_with_fallback(
         return result
     # Keep the primary's real reason — the collapsed "all ERDDAP
     # datasets failed" message below used to erase this, so a genuine
-    # server outage and a cloud-masked-everywhere day looked identical
+    # transport failure and a no-valid-pixel response looked identical
     # in the UI. `last_error` on the primary result already carries it.
     primary_reason = (result or {}).get("last_error") or (result or {}).get("error")
     backup_last_reason: str | None = None

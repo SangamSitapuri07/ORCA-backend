@@ -53,9 +53,17 @@ class ReasonDto {
     );
   }
 
+  DateTime? get parsedSourceTimestamp {
+    final value = synthesisJson?['timestamp'] as String? ?? fetchedAt;
+    return DateFormatter.parseIso(value);
+  }
+
+  DateTime get sourceTimestamp => parsedSourceTimestamp ??
+      DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+
   AgentReasoningResult toEntity(StalenessInfo staleness) {
-    final known = dataCoverage?['known'] as int? ?? 0;
-    final total = dataCoverage?['total'] as int? ?? 0;
+    final known = (dataCoverage?['known_stages'] ?? dataCoverage?['known']) as int? ?? 0;
+    final total = (dataCoverage?['total_stages'] ?? dataCoverage?['total']) as int? ?? 0;
     final parsedAgents = <AgentTraceFinding>[];
 
     for (final raw in agentsList) {
@@ -94,20 +102,18 @@ class ReasonDto {
       ));
     }
 
-    final timestampValue = synthesisJson?['timestamp'] as String? ?? fetchedAt;
     final synthesis = OrchestratorSynthesis(
       headline: synthesisJson?['headline'] as String? ?? summary,
       recommendation: synthesisJson?['recommendation'] as String? ?? recommendation,
       traceOwner: synthesisJson?['trace_owner'] as String? ?? 'ORCA Box reasoner',
-      timestamp: DateFormatter.parseIso(timestampValue) ??
-          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      timestamp: sourceTimestamp,
     );
 
     return AgentReasoningResult(
       overallRisk: overallRisk,
       verdict: verdict,
-      knownSources: known,
-      totalSources: total,
+      knownStages: known,
+      totalStages: total,
       sourcesFailed: failedSources,
       agents: parsedAgents,
       orchestratorSynthesis: synthesis,

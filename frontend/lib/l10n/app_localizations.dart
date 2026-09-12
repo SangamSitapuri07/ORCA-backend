@@ -314,13 +314,13 @@ abstract class AppLocalizations {
   /// No description provided for @aiAgentsTitle.
   ///
   /// In en, this message translates to:
-  /// **'Collaborative Multi-Agent System'**
+  /// **'11-Stage Collaborative Analysis'**
   String get aiAgentsTitle;
 
   /// No description provided for @aiRunAnalysis.
   ///
   /// In en, this message translates to:
-  /// **'Run 10-Agent Analysis'**
+  /// **'Run 11-Stage Analysis'**
   String get aiRunAnalysis;
 
   /// No description provided for @aiRunning.
@@ -332,7 +332,7 @@ abstract class AppLocalizations {
   /// No description provided for @aiCollaborationTrace.
   ///
   /// In en, this message translates to:
-  /// **'Live Agent Collaboration Trace'**
+  /// **'Backend Agent Trace'**
   String get aiCollaborationTrace;
 
   /// No description provided for @aiOrchestrationSynthesis.
@@ -341,23 +341,8 @@ abstract class AppLocalizations {
   /// **'Orchestrator Synthesis'**
   String get aiOrchestrationSynthesis;
 
-  /// No description provided for @aiChatTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Marine Advisory Assistant'**
-  String get aiChatTitle;
 
-  /// No description provided for @aiChatUnavailable.
-  ///
-  /// In en, this message translates to:
-  /// **'Ollama LLM chat is currently paused by design choice to conserve edge resources.'**
-  String get aiChatUnavailable;
 
-  /// No description provided for @aiChatInputHint.
-  ///
-  /// In en, this message translates to:
-  /// **'Ask about ocean conditions...'**
-  String get aiChatInputHint;
 
   /// No description provided for @alertsTitle.
   ///
@@ -519,7 +504,7 @@ abstract class AppLocalizations {
   /// No description provided for @offlineBanner.
   ///
   /// In en, this message translates to:
-  /// **'You are offline. Showing last verified cached advisory.'**
+  /// **'You are offline. Showing the cached advisory with its original time, if available.'**
   String get offlineBanner;
 }
 

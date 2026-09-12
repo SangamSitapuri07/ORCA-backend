@@ -11,7 +11,7 @@ void main() {
         'data_coverage': {
           'known': 7,
           'total': 8,
-          'sources_failed': ['ESA OC-CCI (Cloud-masked)']
+          'sources_failed': ['ESA OC-CCI (no valid pixels)']
         },
         'agents': [
           {

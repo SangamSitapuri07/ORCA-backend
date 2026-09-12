@@ -14,14 +14,17 @@ class SourceFooter extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (sources.isEmpty) {
+    final hasTime = timeLabel != null && timeLabel!.isNotEmpty;
+    if (sources.isEmpty && !hasTime) {
       return const SizedBox.shrink();
     }
 
     final joinedSources = sources.join(' · ');
-    final fullText = timeLabel != null && timeLabel!.isNotEmpty
-        ? '$joinedSources · $timeLabel'
-        : joinedSources;
+    final fullText = sources.isEmpty
+        ? timeLabel!
+        : hasTime
+            ? '$joinedSources · $timeLabel'
+            : joinedSources;
 
     return Container(
       width: double.infinity,
@@ -36,7 +39,7 @@ class SourceFooter extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           const Icon(
-            Icons.verified_outlined,
+            Icons.info_outline,
             size: 14,
             color: OrcaTheme.textMuted,
           ),

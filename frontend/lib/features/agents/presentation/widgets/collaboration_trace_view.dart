@@ -6,7 +6,7 @@ import '../../../../core/widgets/staleness_badge.dart';
 import '../../domain/entities/agent_reasoning.dart';
 import 'agent_card.dart';
 
-/// Live Collaboration Trace displaying the eleven-stage orchestration sequence (§3, §27).
+/// Backend trace displaying the actual eleven-stage orchestration sequence (§3, §27).
 class CollaborationTraceView extends StatelessWidget {
   final AgentReasoningResult reasoning;
 
@@ -37,7 +37,7 @@ class CollaborationTraceView extends StatelessWidget {
                   Row(
                     children: [
                       const Text(
-                        'OVERALL MULTI-AGENT RISK:',
+                        'ANALYTICAL CONTEXT RISK:',
                         style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
@@ -57,7 +57,7 @@ class CollaborationTraceView extends StatelessWidget {
                   const Icon(Icons.shield_outlined, size: 14, color: OrcaTheme.accent),
                   const SizedBox(width: 6),
                   Text(
-                    'Data Coverage: ${reasoning.knownSources}/${reasoning.totalSources} sources verified',
+                    'Known stage status: ${reasoning.knownStages}/${reasoning.totalStages}',
                     style: const TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
@@ -157,7 +157,7 @@ class CollaborationTraceView extends StatelessWidget {
         ),
         const SizedBox(height: 6),
 
-        // 10 Agent Cards rendered dynamically from backend execution
+        // Stage cards rendered dynamically from backend execution
         ...reasoning.agents.map((agent) => AgentCard(finding: agent)),
       ],
     );

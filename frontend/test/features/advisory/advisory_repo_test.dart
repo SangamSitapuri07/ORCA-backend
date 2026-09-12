@@ -49,7 +49,8 @@ void main() {
       verify(() => mockCache.put(any(), any())).called(1);
     });
 
-    test('Falls back to cached advisory with staleness when remote throws network error', () async {
+    test('uses original backend time for cached advisory staleness', () async {
+      final observedAt = DateTime.now().subtract(const Duration(hours: 4));
       final cachedRecord = CachedRecord(
         data: {
           'verdict': 'caution',
@@ -58,8 +59,9 @@ void main() {
           'plain_hi': [],
           'sources': [],
           'data_coverage': {'known': 3, 'total': 4, 'sources_failed': []},
+          'timestamp': observedAt.toUtc().toIso8601String(),
         },
-        fetchedAt: DateTime.now().subtract(const Duration(hours: 4)),
+        fetchedAt: DateTime.now(),
         ttl: const Duration(minutes: 30),
       );
 

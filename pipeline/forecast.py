@@ -173,7 +173,8 @@ def chart_series(forecast: dict[str, Any], hours: int = 48, step: int = 3) -> di
     swell, wind, gusts, surface current, sea-surface temperature, rain.
     """
     empty = {"labels": [], "wave_m": [], "swell_m": [], "wind_kn": [],
-             "gust_kn": [], "current_kn": [], "sst_c": [], "rain_mm": []}
+             "gust_kn": [], "current_kn": [], "sst_c": [], "rain_mm": [],
+             "state": []}
     h = forecast.get("hourly", {})
     times = h.get("time", [])
     if not times:
@@ -186,15 +187,30 @@ def chart_series(forecast: dict[str, Any], hours: int = 48, step: int = 3) -> di
         col = h.get(key) or []
         return [col[k] if k < len(col) else None for k in idx]
 
+    waves = take("wave_height_m")
+    winds = take("wind_kn")
+    gusts = take("gust_kn")
+    states = []
+    for wave, wind, gust in zip(waves, winds, gusts):
+        if wave is None or wind is None or gust is None:
+            states.append("unknown")
+        elif wave >= 4.0 or gust >= 34.0:
+            states.append("danger")
+        elif wave >= 2.5 or wind >= 20.0 or gust >= 28.0:
+            states.append("caution")
+        else:
+            states.append("good")
+
     return {
         "labels": [times[k][5:] for k in idx],  # "MM-DDTHH:MM"
-        "wave_m": take("wave_height_m"),
+        "wave_m": waves,
         "swell_m": take("swell_height_m"),
-        "wind_kn": take("wind_kn"),
-        "gust_kn": take("gust_kn"),
+        "wind_kn": winds,
+        "gust_kn": gusts,
         "current_kn": take("current_kn"),
         "sst_c": take("sst_c"),
         "rain_mm": take("rain_mm"),
+        "state": states,
     }
 
 
@@ -202,17 +218,15 @@ def find_safe_window(
     forecast: dict[str, Any],
     wave_ok_m: float = 2.5,
     wind_ok_kn: float = 20.0,
-    gust_ok_kn: float = 30.0,
+    gust_ok_kn: float = 28.0,
     min_hours: int = 3,
     horizon_hours: int = 72,
 ) -> dict[str, Any]:
-    """First contiguous stretch (≥ min_hours) where a small boat is safe:
-    waves < 2.5 m AND sustained wind < 20 kn AND gusts < 30 kn.
+    """Find a complete-evidence window below ORCA's caution thresholds.
 
-    Thresholds follow WMO/IMD small-craft practice:
-      - ~20 kn ≈ fresh breeze (Beaufort 5) — workable but tiring
-      - 2.5 m — common small-vessel wave caution level in INCOIS bulletins
-    Returns {"from","to","hours"} in UTC, or None values with a note.
+    Every included hour requires waves < 2.5 m, sustained wind < 20 kn, and
+    gusts < 28 kn. These are Phase-1 configured policy limits, not a universal
+    vessel certificate or an attribution to IMD/INCOIS.
     """
     h = forecast.get("hourly", {})
     times = h.get("time", [])

@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import '../../../../core/cache/cache_service.dart';
 import '../../../../core/cache/staleness.dart';
+import '../../../../core/network/dio_failure_mapper.dart';
 import '../../../../core/result/app_failure.dart';
 import '../../../../core/result/result.dart';
 import '../../domain/entities/agent_reasoning.dart';
@@ -30,7 +31,8 @@ class AgentsRepositoryImpl implements AgentsRepository {
 
     if (!forceRefresh && cached != null && !cached.isExpired) {
       final dto = ReasonDto.fromJson(cached.data);
-      return Result.ok(dto.toEntity(cached.staleness));
+      final observedAt = dto.parsedSourceTimestamp ?? cached.fetchedAt;
+      return Result.ok(dto.toEntity(StalenessInfo.fromDateTime(observedAt)));
     }
 
     try {
@@ -49,21 +51,21 @@ class AgentsRepositoryImpl implements AgentsRepository {
       };
       await _cacheService.put(cacheKey, jsonMap);
 
-      final staleness = StalenessInfo.fromDateTime(DateTime.now());
-      return Result.ok(dto.toEntity(staleness));
+      return Result.ok(
+        dto.toEntity(StalenessInfo.fromDateTime(dto.sourceTimestamp)),
+      );
     } on DioException catch (dioErr) {
       if (cached != null) {
         final dto = ReasonDto.fromJson(cached.data);
-        return Result.ok(dto.toEntity(cached.staleness));
+        final observedAt = dto.parsedSourceTimestamp ?? cached.fetchedAt;
+        return Result.ok(dto.toEntity(StalenessInfo.fromDateTime(observedAt)));
       }
-      if (dioErr.type == DioExceptionType.connectionTimeout) {
-        return const Result.err(AppFailure.timeout());
-      }
-      return const Result.err(AppFailure.serverDown());
+      return Result.err(mapDioFailure(dioErr));
     } catch (e) {
       if (cached != null) {
         final dto = ReasonDto.fromJson(cached.data);
-        return Result.ok(dto.toEntity(cached.staleness));
+        final observedAt = dto.parsedSourceTimestamp ?? cached.fetchedAt;
+        return Result.ok(dto.toEntity(StalenessInfo.fromDateTime(observedAt)));
       }
       return Result.err(AppFailure.unknown(e.toString()));
     }

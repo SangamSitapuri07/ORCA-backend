@@ -22,6 +22,7 @@ class ZoneDto {
   final double? nearestHarbourDistKm;
   final List<String> sources;
   final List<String> sourcesFailed;
+  final Map<String, dynamic>? observationMetadataJson;
   final String? timestampStr;
 
   ZoneDto({
@@ -43,6 +44,7 @@ class ZoneDto {
     this.nearestHarbourDistKm,
     required this.sources,
     required this.sourcesFailed,
+    this.observationMetadataJson,
     this.timestampStr,
   });
 
@@ -75,11 +77,47 @@ class ZoneDto {
       sourcesFailed: _strings(json['sources_failed']).isNotEmpty
           ? _strings(json['sources_failed'])
           : _strings(json['data_sources_failed']),
+      observationMetadataJson: json['observation_metadata'] is Map
+          ? Map<String, dynamic>.from(json['observation_metadata'] as Map)
+          : null,
       timestampStr: (json['fetched_at'] ?? json['timestamp']) as String?,
     );
   }
 
+  DateTime? get parsedSourceTimestamp => DateFormatter.parseIso(timestampStr);
+
+  DateTime get sourceTimestamp => parsedSourceTimestamp ??
+      DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+
   ZoneSnapshot toEntity(StalenessInfo staleness) {
+    const displayedObservationKeys = <String>{
+      'wave_height_m',
+      'wind_speed_kn',
+      'sea_temp_c',
+      'current_speed_kn',
+      'chlorophyll_mg_m3',
+      'fishing_effort_hours',
+    };
+    final observations = <String, ZoneObservationMetadata>{};
+    observationMetadataJson?.forEach((key, raw) {
+      if (!displayedObservationKeys.contains(key) || raw is! Map) return;
+      final value = Map<String, dynamic>.from(raw);
+      final observedAt = value['observed_at']?.toString();
+      final observedFrom = value['observed_from']?.toString();
+      final observedTo = value['observed_to']?.toString();
+      final timeLabel = observedAt != null && observedAt.isNotEmpty
+          ? observedAt
+          : observedFrom != null && observedTo != null
+              ? '$observedFrom to $observedTo'
+              : 'Observation time unavailable';
+      observations[key] = ZoneObservationMetadata(
+        source: value['source']?.toString() ?? 'Source unavailable',
+        timeLabel: timeLabel,
+        statistic: value['statistic']?.toString(),
+        note: value['note']?.toString(),
+      );
+    });
+
     return ZoneSnapshot(
       lat: lat,
       lon: lon,
@@ -99,8 +137,8 @@ class ZoneDto {
       nearestHarbourDistKm: nearestHarbourDistKm,
       sources: sources,
       sourcesFailed: sourcesFailed,
-      timestamp: DateFormatter.parseIso(timestampStr) ??
-          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      observations: observations,
+      timestamp: sourceTimestamp,
       staleness: staleness,
     );
   }

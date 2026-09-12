@@ -70,9 +70,9 @@ def _mk_alert(
 def evaluate_status(lat: float, lon: float) -> dict[str, Any]:
     """Evaluate real conditions and report both alerts and source status.
 
-    An empty alert list is an all-clear only when providers were actually
-    reached. Provider failures are returned explicitly so callers never turn
-    "could not check" into a green safety statement.
+    An empty list means only that no rule triggered among completed checks; it
+    is not an operational all-clear. Missing fields and provider failures are
+    returned explicitly so callers never turn "could not check" into green.
     """
     new_alerts: list[dict[str, Any]] = []
     sources_used: list[str] = []
@@ -83,9 +83,22 @@ def evaluate_status(lat: float, lon: float) -> dict[str, Any]:
         point_fc = fc.get_point_forecast(lat, lon)
         n24 = point_fc.get("next24h", {})
         src = point_fc.get("source", "Open-Meteo")
-        sources_used.append(str(src))
+        required = {
+            "wave_max_m": n24.get("wave_max_m"),
+            "gust_max_kn": n24.get("gust_max_kn"),
+            "rain_total_mm": n24.get("rain_total_mm"),
+        }
+        available = [name for name, value in required.items() if value is not None]
+        missing = [name for name, value in required.items() if value is None]
+        if available:
+            sources_used.append(str(src))
+        if missing:
+            sources_failed.append(
+                "Open-Meteo forecast: required alert fields unavailable: "
+                + ", ".join(missing)
+            )
 
-        w = n24.get("wave_max_m")
+        w = required["wave_max_m"]
         if w is not None:
             if w >= 3.5:
                 new_alerts.append(_mk_alert(
@@ -103,7 +116,7 @@ def evaluate_status(lat: float, lon: float) -> dict[str, Any]:
                     f"Waves up to {w:.1f} m expected in 24 h — caution for small boats.",
                     lat, lon, 24, src))
 
-        g = n24.get("gust_max_kn")
+        g = required["gust_max_kn"]
         if g is not None:
             if g >= 34:
                 new_alerts.append(_mk_alert(
@@ -121,7 +134,7 @@ def evaluate_status(lat: float, lon: float) -> dict[str, Any]:
                     f"Gusts up to {g:.0f} kn in next 24 h — secure gear, plan accordingly.",
                     lat, lon, 24, src))
 
-        rain = n24.get("rain_total_mm")
+        rain = required["rain_total_mm"]
         if rain is not None and rain >= 64.5:
             new_alerts.append(_mk_alert(
                 "heavy_rain", "warning",

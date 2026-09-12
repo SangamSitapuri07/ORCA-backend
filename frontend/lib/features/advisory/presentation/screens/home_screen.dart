@@ -96,7 +96,7 @@ class HomeScreen extends ConsumerWidget {
                         CircularProgressIndicator(color: OrcaTheme.accent),
                         SizedBox(height: 16),
                         Text(
-                          'Fetching live ocean observations...',
+                          'Checking ocean conditions with the ORCA Box...',
                           style: TextStyle(
                             color: OrcaTheme.textSecondary,
                             fontSize: 14,

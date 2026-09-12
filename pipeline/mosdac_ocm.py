@@ -17,13 +17,12 @@ Pipeline per query:
                              fetched fresh. Nothing is pre-baked.
   4. Point extraction      — parser.parse + extractors.extract_chlorophyll
 
-Role in the pipeline: THIRD, independent chlorophyll source. NOAA ERDDAP
-stays primary (global daily NRT), ESA OC-CCI cross-checks, MOSDAC adds
-the high-resolution (1 km LAC) Indian view. When the first two are
-cloud-masked, MOSDAC can still be primary — its messages say so.
+Role in the current pipeline: optional independent chlorophyll comparison.
+MOSDAC retains its own product identity, date, pixel evidence, and failure;
+it does not silently become the selected generic chlorophyll observation.
 
-Any failure (login down, no granule yet, slow link) returns an honest
-error dict — never an invented value.
+Authentication, search, download, and extraction failures return their actual
+stage/error in a bounded error dict—never an invented value or guessed cause.
 
 Self-test on the laptop (where the creds live):
 
@@ -250,12 +249,11 @@ def _drain_in_background(r, tmp: Path, dest: Path, rec_id: Any,
     """Hand a SLOW-BUT-ALIVE granule stream to a daemon thread that keeps
     trickling to completion after the request-side budget gave up.
 
-    Why: MOSDAC's data host sometimes crawls (~100 KB/s). The 70 s wall
-    cap protects the /reason deadline, but the honest "link crawling"
-    error used to throw away the megabytes already fetched — so EVERY
-    retry paid the full slow-download cost again and demo-day MOSDAC
-    stayed red for hours. A daemon drain converts "server is slow today"
-    into "this point's second click in ~10 min is an INSTANT same-day
+    Why: a request-budget timeout may occur after part of a granule has
+    already arrived. Discarding it makes every retry repay the measured
+    download cost. A daemon drain converts
+    a request-budget timeout with an active byte stream into a chance that
+    this point's second click in ~10 min is an instant same-day
     cache hit" — still 100% real MOSDAC bytes, zero invented data.
 
     Returns True if a drain was started (or one is already running).
@@ -333,7 +331,7 @@ def _download_granule(session, rec_id: Any,
     """Live-download one granule from MOSDAC (same-day disk cache).
 
     Returns (path, error, seconds). Streams with an idle-timeout and a
-    hard size guard so a flaky demo link fails HONESTLY instead of
+    hard size guard so a bounded request failure is returned instead of
     hanging the /reason deadline.
 
     wall_cap_sec / idle_cap_sec: the caller's REMAINING budget. Without
@@ -704,8 +702,8 @@ def _fail_message(why: str) -> str:
     mid-word (external reviewer flagged a literal 'no v' truncation,
     2026-09-07): prefer ending at a '; or ' candidate boundary, else
     at a whole word, and always say so with '; +more' / '…'."""
-    prefix = "MOSDAC OCM-3 live fetch failed ("
-    suffix = ") — NOAA primary is used"
+    prefix = "MOSDAC OCM-3 comparison failed ("
+    suffix = ")"
     budget = 260 - len(prefix) - len(suffix)
     if len(why) <= budget:
         return prefix + why + suffix
@@ -1023,8 +1021,8 @@ def _selftest() -> int:
                 print("                  python -m pipeline.mosdac_ocm --debug --lat 20.2 --lon 70.0")
         except Exception as e:  # noqa: BLE001
             print("     --debug stats failed:", e)
-    print("       (server busy or no fresh granule yet — agents will show this")
-    print("        honest message and keep using NOAA primary. Re-run later.)")
+    print("       (No usable MOSDAC comparison was produced; the exact stage/error")
+    print("        is shown above. Other sources retain their own status.)")
     return 1
 
 

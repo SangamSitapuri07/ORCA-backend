@@ -1,4 +1,4 @@
-"""Live demo: full ORCA pipeline with 4+ data sources + 10 agents.
+"""Run the current ORCA provider pipeline and eleven-stage trace.
 
 This is the SIH pitch demo. Run with your GFW_API_TOKEN set:
 
@@ -16,15 +16,16 @@ from pipeline.reasoner import reason
 
 
 def main():
-    if not os.environ.get("GFW_API_TOKEN"):
-        print("⚠️  GFW_API_TOKEN not set — GFW calls will be skipped (mocked).")
+    include_gfw = bool(os.environ.get("GFW_API_TOKEN"))
+    if not include_gfw:
+        print("⚠️  GFW_API_TOKEN not set — GFW calls will be recorded as skipped.")
 
     print("=" * 70)
     print("ORCA Marine Intelligence — full pipeline demo")
     print("=" * 70)
 
-    # Mumbai offshore, Aug 15 2026
-    snap = zone_snapshot(19.0, 72.8, "2026-08-15", include_gfw=True)
+    # Offshore Mumbai control; providers select the current date by default.
+    snap = zone_snapshot(19.0, 72.8, include_gfw=include_gfw)
     print("\n[ZoneSnapshot]")
     print(json.dumps({k: v for k, v in snap.items()
                       if k not in ("data_sources_failed", "daily")},

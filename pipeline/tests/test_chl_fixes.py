@@ -100,8 +100,8 @@ def test_occci_picks_nearest_cell():
         urllib.request.urlopen = orig_urlopen
 
 
-def test_occci_handles_all_null():
-    """All null (clouds) → error dict, not crash."""
+def test_occci_handles_all_null(monkeypatch):
+    """All-null product values return an error dict without guessing why."""
     fake_json = {
         "table": {
             "columnNames": ["time", "latitude", "longitude", "chlor_a"],
@@ -117,17 +117,39 @@ def test_occci_handles_all_null():
         def read(self): return json.dumps(self.data).encode("utf-8")
         def __enter__(self): return self
         def __exit__(self, *a): pass
-    urllib.request.urlopen = lambda req, timeout=15: FakeResp(fake_json)
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda req, timeout=15: FakeResp(fake_json),
+    )
     result = occci_chl.get_chlorophyll(13.5, 80.5, "2026-08-15")
     assert result is not None
     assert "error" in result
     print("✅ test_occci_handles_all_null passed")
 
 
-if __name__ == "__main__":
-    test_noaa_chl_picks_nearest_cell_not_box_mean()
-    test_noaa_chl_handles_no_data()
-    test_occci_query_url_2d()
-    test_occci_picks_nearest_cell()
-    test_occci_handles_all_null()
-    print("\n🎉 All 5 chlorophyll fix tests passed!")
+def test_occci_rejects_value_without_observation_time(monkeypatch):
+    """A numeric OC-CCI value is unusable when its time cannot be verified."""
+    fake_json = {
+        "table": {
+            "columnNames": ["time", "latitude", "longitude", "chlor_a"],
+            "rows": [[None, 13.5, 80.5, 0.31]],
+        }
+    }
+    import urllib.request
+
+    class FakeResp:
+        def read(self):
+            return json.dumps(fake_json).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *args, **kwargs: FakeResp())
+    result = occci_chl.get_chlorophyll(13.5, 80.5, "2026-08-15")
+    assert result is not None
+    assert result.get("value") is None
+    assert "without an observation time" in result["error"]

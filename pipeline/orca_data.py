@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import os
 import sys
-import traceback
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -49,8 +48,8 @@ from pipeline import ttlcache
 from pipeline.openmeteo_sst import get_sst_at_point
 
 # How long a "last known good" value stays eligible as a stale
-# fallback when the live source fails outright. 6h: long enough that
-# a flaky server hiccup on THIS click doesn't lose data a click an
+# fallback when the current source request fails. 6h: long enough that
+# a measured live-request failure doesn't lose data that a click an
 # hour ago successfully fetched, short enough that "stale" still
 # means something on a fast-moving ocean surface.
 STALE_FALLBACK_MAX_AGE_SEC = 6 * 3600
@@ -64,11 +63,9 @@ def _grid_key(lat: float, lon: float) -> str:
 # without it. The full snapshot completes in ~sum-of-timeouts in the
 # worst case, but in practice with the thread pool all sources run
 # concurrently and the total is bounded by max timeout.
-# Per-source cap inside the PARALLEL gather. 20 s (was 12): the US-hosted
-# chlorophyll servers (NOAA/OC-CCI) regularly need 12-20 s from Indian
-# networks — the old cap killed them before they could answer. Parallel
-# gather means the wall-clock is max(source times), not the sum, so a
-# bigger cap costs nothing when others are fast.
+# Per-source cap inside the parallel gather. The audited runtime has measured
+# provider attempts longer than the old 12-second cap. Parallel gathering keeps
+# wall-clock close to the slowest source rather than adding source durations.
 SOURCE_TIMEOUT_SEC = 20.0
 
 # Lazy source getters. They import the heavy modules (which may need
@@ -106,7 +103,7 @@ def _get_gfw_fleet():
 
 def _get_baseline():
     """Anomaly agent's cached ERA5 baseline walker. The snapshot warms
-    it INSIDE the parallel gather so the ten-specialist run never pays the
+    it INSIDE the parallel gather so the specialist-agent run never pays the
     3 archive calls serially afterwards (that serial tail pushed a cold
     /reason past its 110 s deadline on the 2026-09-07 night log)."""
     from pipeline.agents import anomaly
@@ -138,7 +135,7 @@ def _safe(callable_, *args, default=None, label="source", timeout: float = SOURC
     """
     def _call():
         result = callable_(*args, **kwargs)
-        if isinstance(result, dict) and "error" in result and len(result) == 2:
+        if isinstance(result, dict) and result.get("error"):
             return None, f"{label}: {result['error']}"
         return result, None
 
@@ -150,8 +147,7 @@ def _safe(callable_, *args, default=None, label="source", timeout: float = SOURC
             except FuturesTimeout:
                 return None, f"{label}: timeout after {timeout:.0f}s"
     except Exception as e:  # noqa: BLE001
-        tb = traceback.format_exc(limit=2)
-        return None, f"{label}: {type(e).__name__}: {e}\n{tb}"
+        return None, f"{label}: {type(e).__name__}: {e}"
 
 
 def _gather(
@@ -172,7 +168,7 @@ def _gather(
         to = jobs[name][4] if len(jobs[name]) > 4 else timeout  # per-job override
         try:
             res = fut.result(timeout=to)
-            if isinstance(res, dict) and "error" in res and len(res) == 2:
+            if isinstance(res, dict) and res.get("error"):
                 out[name] = (None, f"{label}: {res['error']}")
             else:
                 out[name] = (res, None)
@@ -239,9 +235,11 @@ def zone_snapshot(
         "fetched_at": _now_iso(),
         "data_sources_used": [],
         "data_sources_failed": [],
+        "data_sources_skipped": [],
+        "observation_metadata": {},
     }
 
-    # ── Sources 1–3 run CONCURRENTLY (Open-Meteo + NOAA + OC-CCI + INCOIS).
+    # ── Primary sources run concurrently (Open-Meteo, NOAA, OC-CCI, MOSDAC).
     # Sequential fetching cost ~85 s in the worst case, and the UI fires
     # /reason + /advisory for the same point at the same moment — parallel
     # fetching plus single-flight caching (ttlcache) is what keeps the
@@ -286,7 +284,7 @@ def zone_snapshot(
             )
         # Silent warmers: results are NOT snapshot fields — they pre-fill
         # the shared ttlcache under the exact keys the anomaly/weather
-        # agents (and the advisory) read, so the serial ten-specialist run that
+        # agents (and the advisory) read, so the serial specialist run that
         # follows the gather finds them warm. Never listed as
         # used/failed sources: the agents report their own status.
         try:
@@ -322,15 +320,44 @@ def zone_snapshot(
 
     # 1) Open-Meteo SST + waves
     sst, err = results.get("openmeteo", (None, "Open-Meteo: not run"))
-    if sst and not err:
+    got_sst_history = bool(
+        isinstance(sst, dict)
+        and not err
+        and any(sst.get(key) is not None for key in ("sst_max", "sst_min", "sst_mean", "wave_max", "wave_mean"))
+    )
+    if got_sst_history:
         snap["sst_max"] = sst.get("sst_max") if isinstance(sst, dict) else None
         snap["sst_min"] = sst.get("sst_min") if isinstance(sst, dict) else None
         snap["sst_mean"] = sst.get("sst_mean") if isinstance(sst, dict) else None
         snap["wave_max"] = sst.get("wave_max") if isinstance(sst, dict) else None
         snap["wave_mean"] = sst.get("wave_mean") if isinstance(sst, dict) else None
-        snap["data_sources_used"].append("Open-Meteo Marine (SST + waves)")
+        sst_source = sst.get("source", "Open-Meteo Marine API")
+        sst_start = sst.get("start_date", gfw_start)
+        sst_end = sst.get("end_date", gfw_end)
+        history_statistics = {
+            "sst_max": "Maximum available daily maximum SST in this period",
+            "sst_min": "Minimum available daily minimum SST in this period",
+            "sst_mean": "Mean of available daily maximum SST values in this period",
+            "wave_max": "Maximum available daily maximum wave height in this period",
+            "wave_mean": "Mean of available daily maximum wave heights in this period",
+        }
+        for field, statistic in history_statistics.items():
+            if snap.get(field) is not None:
+                snap["observation_metadata"][field] = {
+                    "source": sst_source,
+                    "observed_from": sst_start,
+                    "observed_to": sst_end,
+                    "statistic": statistic,
+                }
+        if "sst_mean" in snap["observation_metadata"]:
+            snap["observation_metadata"]["sea_temp_c"] = dict(
+                snap["observation_metadata"]["sst_mean"]
+            )
+        snap["data_sources_used"].append(
+            f"Open-Meteo Marine (SST/wave history, {sst_start} to {sst_end})"
+        )
     else:
-        snap["data_sources_failed"].append(err or "Open-Meteo: no data")
+        snap["data_sources_failed"].append(err or "Open-Meteo: no SST/wave values")
 
     # 2) NOAA ERDDAP chlorophyll
     # VIIRS data runs on a ~3-day processing lag, so "today" (and usually
@@ -379,36 +406,42 @@ def zone_snapshot(
 
     noaa_key = f"noaa:{_grid_key(lat, lon)}"
     if not got_noaa and noaa_fn is not None:
-        # Live fetch (+ 3-day-lag, + 7-day-lag) all came back empty.
-        # Before reporting a hard failure, check whether we successfully
-        # read this same spot recently — cloud cover / a dead ERDDAP
-        # instance doesn't mean the last good reading is wrong yet.
+        # Current requested/lag attempts produced no usable value. A recent
+        # last-known-good value remains eligible only when its observation date
+        # is present; the current failure is still reported below.
         stale = ttlcache.get_last_good(noaa_key, STALE_FALLBACK_MAX_AGE_SEC)
-        if stale and stale.get("value") is not None:
+        if stale and stale.get("value") is not None and stale.get("date"):
             chl = stale
             got_noaa = True
-            attempt_date = stale.get("date", chl_date)
+            attempt_date = stale["date"]
 
     if got_noaa and isinstance(chl, dict):
+        selected_date = chl.get("date") or attempt_date
         snap["chlorophyll"] = chl.get("value")
         snap["chlorophyll_unit"] = chl.get("units", "mg/m^3")
         snap["chlorophyll_source"] = chl.get("source", "NOAA ERDDAP DINEOF")
-        snap["chlorophyll_date"] = attempt_date
+        snap["chlorophyll_date"] = selected_date
         if chl.get("_stale"):
             snap["chlorophyll_note"] = (
-                f"Live NOAA ERDDAP unavailable right now; showing the last "
-                f"successful reading from {chl['_stale_age_sec'] // 60} min ago."
+                f"Current NOAA ERDDAP attempts produced no usable value; showing "
+                f"the last successful reading from {chl['_stale_age_sec'] // 60} "
+                f"min ago (observation {selected_date})."
+            )
+            snap["data_sources_failed"].append(
+                err_noaa or "NOAA ERDDAP: current attempts returned no usable value"
             )
             snap["data_sources_used"].append(
                 f"NOAA ERDDAP (chlorophyll, cached {chl['_stale_age_sec'] // 60}m old)"
             )
         else:
-            if attempt_date != chl_date:
+            if selected_date != chl_date:
                 snap["chlorophyll_note"] = (
-                    f"Requested date had no product yet (satellite lag); "
-                    f"showing {attempt_date} analysis instead."
+                    f"Requested date had no usable product; showing the "
+                    f"{selected_date} observation instead."
                 )
-            snap["data_sources_used"].append(f"NOAA ERDDAP (chlorophyll, {attempt_date})")
+            snap["data_sources_used"].append(
+                f"NOAA ERDDAP (chlorophyll, {selected_date})"
+            )
         if chl.get("box_min") is not None:
             snap["chlorophyll_box_min"] = chl["box_min"]
             snap["chlorophyll_box_max"] = chl["box_max"]
@@ -423,21 +456,42 @@ def zone_snapshot(
     if occci_fn is not None:
         occci_key = f"occci:{_grid_key(lat, lon)}"
         occci, err = results.get("occci", (None, "ESA OC-CCI: not run"))
-        got_occci = bool(occci and not err and occci.get("value") is not None)
+        if (
+            occci
+            and not err
+            and occci.get("value") is not None
+            and occci.get("date") in (None, "latest")
+        ):
+            err = "ESA OC-CCI: value returned without a verifiable observation date"
+        got_occci = bool(
+            occci
+            and not err
+            and occci.get("value") is not None
+            and occci.get("date") not in (None, "latest")
+        )
         if not got_occci:
-            # Cloud-masked-everywhere and dead-server both land here; a
-            # recent successful reading is still more useful than nothing.
+            # A last-known-good value remains eligible only with an actual
+            # observation date. The current failure is retained when used.
             stale = ttlcache.get_last_good(occci_key, STALE_FALLBACK_MAX_AGE_SEC)
-            if stale and stale.get("value") is not None:
+            if (
+                stale
+                and stale.get("value") is not None
+                and stale.get("date") not in (None, "latest")
+            ):
                 occci = stale
                 got_occci = True
         if got_occci and isinstance(occci, dict):
             snap["chlorophyll_occci"] = occci.get("value")
             snap["chlorophyll_occci_source"] = occci.get("source", "ESA OC-CCI")
+            snap["chlorophyll_occci_date"] = occci.get("date")
             if occci.get("_stale"):
                 snap["chlorophyll_occci_note"] = (
-                    f"Live OC-CCI unavailable; showing a reading from "
-                    f"{occci['_stale_age_sec'] // 60} min ago."
+                    "Current OC-CCI request produced no usable value; showing "
+                    f"a cached reading from {occci['_stale_age_sec'] // 60} min "
+                    f"ago (observation {occci.get('date')})."
+                )
+                snap["data_sources_failed"].append(
+                    err or "ESA OC-CCI: current request returned no usable value"
                 )
             else:
                 ttlcache.remember_last_good(occci_key, occci)
@@ -446,8 +500,23 @@ def zone_snapshot(
                 snap["chlorophyll_unit"] = occci.get("units", "mg/m^3")
                 snap["chlorophyll_source"] = occci.get("source", "ESA OC-CCI")
                 snap["chlorophyll_date"] = occci.get("date")
-                snap["chlorophyll_note"] = "NOAA unavailable; showing ESA OC-CCI latest-analysis instead."
-                snap["data_sources_used"].append("ESA OC-CCI (chlorophyll, fallback primary)")
+                occci_date = occci.get("date") or "date unavailable"
+                if occci.get("_stale"):
+                    stale_minutes = int(occci.get("_stale_age_sec", 0)) // 60
+                    snap["chlorophyll_note"] = (
+                        "NOAA returned no usable chlorophyll value; showing a "
+                        f"cached ESA OC-CCI reading from {stale_minutes} min ago "
+                        f"(observation {occci_date})."
+                    )
+                    snap["data_sources_used"].append(
+                        f"ESA OC-CCI (selected chlorophyll source, cached {stale_minutes}m old)"
+                    )
+                else:
+                    snap["chlorophyll_note"] = (
+                        "NOAA returned no usable chlorophyll value; showing the "
+                        f"ESA OC-CCI observation ({occci_date}) instead."
+                    )
+                    snap["data_sources_used"].append("ESA OC-CCI (selected chlorophyll source)")
             else:
                 snap["data_sources_used"].append("ESA OC-CCI (chlorophyll cross-check)")
         else:
@@ -455,20 +524,27 @@ def zone_snapshot(
                 err or (occci or {}).get("error") or "OC-CCI: no data"
             )
 
-    # 2c) ISRO MOSDAC OCM-3 live — desi third source. Cross-check role
-    # like OC-CCI; never masks NOAA as primary, but its presence lets the
-    # satellite agent do a NOAA vs ESA vs ISRO three-way comparison. 🇮🇳
+    # 2c) ISRO MOSDAC OCM-3 optional independent comparison. It retains its
+    # own identity and never silently replaces the NOAA/OC-CCI selected value.
     if mosdac_fn is not None:
         mosdac_key = f"mosdac:{_grid_key(lat, lon)}"
         mosdac, merr = results.get("mosdac", (None, "MOSDAC OCM-3: not run"))
-        got_mosdac = bool(mosdac and not merr and mosdac.get("value") is not None)
+        if (
+            mosdac
+            and not merr
+            and mosdac.get("value") is not None
+            and not mosdac.get("date")
+        ):
+            merr = "MOSDAC OCM-3: value returned without a verifiable observation date"
+        got_mosdac = bool(
+            mosdac
+            and not merr
+            and mosdac.get("value") is not None
+            and mosdac.get("date")
+        )
         if not got_mosdac:
-            # The live chain (login+search+download+extract) is the
-            # slowest, most failure-prone source in the whole pipeline
-            # (see JOB_BUDGET_SEC note above) — this is where a stale
-            # fallback earns its keep the most.
             stale = ttlcache.get_last_good(mosdac_key, STALE_FALLBACK_MAX_AGE_SEC)
-            if stale and stale.get("value") is not None:
+            if stale and stale.get("value") is not None and stale.get("date"):
                 mosdac = stale
                 got_mosdac = True
         if got_mosdac and isinstance(mosdac, dict):
@@ -477,9 +553,12 @@ def zone_snapshot(
             snap["chlorophyll_mosdac_date"] = mosdac.get("date")
             if mosdac.get("_stale"):
                 snap["chlorophyll_mosdac_note"] = (
-                    f"Live MOSDAC fetch unavailable this click (see 'Failed "
-                    f"sources' for why); showing the last successful granule "
-                    f"read {mosdac['_stale_age_sec'] // 60} min ago."
+                    "Current MOSDAC comparison produced no usable value; showing "
+                    f"the cached granule read {mosdac['_stale_age_sec'] // 60} min "
+                    f"ago (observation {mosdac.get('date')})."
+                )
+                snap["data_sources_failed"].append(
+                    merr or "MOSDAC OCM-3: current request returned no usable value"
                 )
             else:
                 if mosdac.get("note"):
@@ -490,8 +569,8 @@ def zone_snapshot(
                       "area_median", "area_valid", "cdom_value", "cdom_units"):
                 if mosdac.get(k) is not None:
                     snap[f"chlorophyll_mosdac_{k}"] = mosdac[k]
-            label = "ISRO MOSDAC OCM-3 (chlorophyll, live 🇮🇳)" if not mosdac.get("_stale") else (
-                f"ISRO MOSDAC OCM-3 (chlorophyll, cached {mosdac['_stale_age_sec'] // 60}m old 🇮🇳)"
+            label = "ISRO MOSDAC OCM-3 (chlorophyll comparison)" if not mosdac.get("_stale") else (
+                f"ISRO MOSDAC OCM-3 (chlorophyll comparison, cached {mosdac['_stale_age_sec'] // 60}m old)"
             )
             snap["data_sources_used"].append(label)
         else:
@@ -500,7 +579,7 @@ def zone_snapshot(
             )
 
     # 3) INCOIS backup chlorophyll — CONDITIONAL: only queried when both
-    # NOAA and OC-CCI failed, so the flaky server never sits in the hot
+    # NOAA and OC-CCI failed, so the backup request never sits in the hot
     # path (and never shows as "failed" noise when it wasn't even used).
     # Since 2026-09-04 the query itself is crash-safe (server-side
     # hyperslab subset, KBs on the wire — the GBs-into-RAM path is gone).
@@ -531,22 +610,38 @@ def zone_snapshot(
                 default=None, label="INCOIS LAS", timeout=incois_timeout,
                 timeout_sec=incois_timeout,
             )
-            got_incois = bool(incois_chl and not err and incois_chl.get("value") is not None)
+            if (
+                incois_chl
+                and not err
+                and incois_chl.get("value") is not None
+                and not incois_chl.get("date")
+            ):
+                err = "INCOIS LAS: value returned without a verifiable observation date"
+            got_incois = bool(
+                incois_chl
+                and not err
+                and incois_chl.get("value") is not None
+                and incois_chl.get("date")
+            )
             incois_key = f"incois:{_grid_key(lat, lon)}"
             if not got_incois:
                 stale = ttlcache.get_last_good(incois_key, STALE_FALLBACK_MAX_AGE_SEC)
-                if stale and stale.get("value") is not None:
+                if stale and stale.get("value") is not None and stale.get("date"):
                     incois_chl = stale
                     got_incois = True
             if got_incois and isinstance(incois_chl, dict):
                 snap["chlorophyll"] = incois_chl.get("value")
                 snap["chlorophyll_unit"] = incois_chl.get("units", "mg/m^3")
                 snap["chlorophyll_source"] = incois_chl.get("source", "INCOIS LAS")
-                snap["chlorophyll_date"] = chl_date
+                snap["chlorophyll_date"] = incois_chl.get("date")
                 if incois_chl.get("_stale"):
                     snap["chlorophyll_note"] = (
-                        f"Live INCOIS unavailable; showing a reading from "
-                        f"{incois_chl['_stale_age_sec'] // 60} min ago."
+                        "Current INCOIS request produced no usable value; showing "
+                        f"a cached reading from {incois_chl['_stale_age_sec'] // 60} "
+                        f"min ago (observation {incois_chl.get('date')})."
+                    )
+                    snap["data_sources_failed"].append(
+                        err or "INCOIS LAS: current request returned no usable value"
                     )
                     snap["data_sources_used"].append(
                         f"INCOIS LAS (backup chlorophyll, cached {incois_chl['_stale_age_sec'] // 60}m old)"
@@ -563,6 +658,36 @@ def zone_snapshot(
         else:
             snap["data_sources_failed"].append(f"INCOIS: import error: {incois_imp_err}")
 
+    if snap.get("chlorophyll_occci") is not None:
+        occci_meta = {
+            "source": snap.get("chlorophyll_occci_source", "ESA OC-CCI"),
+            "observed_at": snap.get("chlorophyll_occci_date"),
+            "statistic": "Independent point/box chlorophyll comparison",
+        }
+        if snap.get("chlorophyll_occci_note"):
+            occci_meta["note"] = snap["chlorophyll_occci_note"]
+        snap["observation_metadata"]["chlorophyll_occci"] = occci_meta
+
+    if snap.get("chlorophyll_mosdac") is not None:
+        mosdac_meta = {
+            "source": snap.get("chlorophyll_mosdac_source", "ISRO MOSDAC OCM-3"),
+            "observed_at": snap.get("chlorophyll_mosdac_date"),
+            "statistic": "Independent OCM-3 pixel/ring chlorophyll comparison",
+        }
+        if snap.get("chlorophyll_mosdac_note"):
+            mosdac_meta["note"] = snap["chlorophyll_mosdac_note"]
+        snap["observation_metadata"]["chlorophyll_mosdac"] = mosdac_meta
+
+    if snap.get("chlorophyll") is not None:
+        chlorophyll_meta = {
+            "source": snap.get("chlorophyll_source", "Unavailable"),
+            "observed_at": snap.get("chlorophyll_date"),
+        }
+        if snap.get("chlorophyll_note"):
+            chlorophyll_meta["note"] = snap["chlorophyll_note"]
+        snap["observation_metadata"]["chlorophyll"] = chlorophyll_meta
+        snap["observation_metadata"]["chlorophyll_mg_m3"] = dict(chlorophyll_meta)
+
     # 4) GFW fishing effort + fleet composition (fetched in the parallel
     # gather above — just map the results here)
     if include_gfw:
@@ -574,7 +699,9 @@ def zone_snapshot(
             t = (err_text or "").lower()
             return any(k in t for k in ("token", "quota", "401", "403", "unauthorized", "forbidden"))
 
-        gfw_effort_key = f"gfw_effort:{_grid_key(lat, lon)}"
+        gfw_effort_key = (
+            f"gfw_effort:{_grid_key(lat, lon)}:{radius_deg}:{gfw_start}:{gfw_end}"
+        )
         effort, err = results.get("gfw_effort", (None, "GFW effort: not run"))
         if effort and not err and "error" in effort:
             err = f"GFW effort: {effort['error']}"  # token invalid/expired/quota — surface honestly
@@ -586,11 +713,33 @@ def zone_snapshot(
                 effort = stale
                 got_effort = True
         if got_effort:
+            effort_start = effort.get("start_date") or gfw_start
+            effort_end = effort.get("end_date") or gfw_end
             snap["fishing_hours"] = effort.get("hours")
             snap["vessel_count_effort"] = effort.get("vessel_ids", 0)
-            snap["fishing_window_start"] = gfw_start
-            snap["fishing_window_end"] = gfw_end
+            snap["fishing_window_start"] = effort_start
+            snap["fishing_window_end"] = effort_end
             snap["fishing_bbox_radius_deg"] = radius_deg
+            effort_meta = {
+                "source": effort.get("source", "Global Fishing Watch activity report"),
+                "observed_from": effort_start,
+                "observed_to": effort_end,
+                "statistic": "Reported fishing activity hours in the query area",
+            }
+            if effort.get("_stale"):
+                effort_meta["note"] = (
+                    f"Cached result read {effort['_stale_age_sec'] // 60} min ago"
+                )
+                snap["data_sources_failed"].append(
+                    err or "GFW effort: current request returned no usable value"
+                )
+            snap["observation_metadata"]["fishing_hours"] = effort_meta
+            snap["observation_metadata"]["fishing_effort_hours"] = dict(effort_meta)
+            if snap.get("vessel_count_effort") is not None:
+                snap["observation_metadata"]["vessel_count_effort"] = {
+                    **effort_meta,
+                    "statistic": "Unique vessel IDs in the activity report",
+                }
             if effort.get("_stale"):
                 snap["data_sources_used"].append(
                     f"Global Fishing Watch (effort, cached {effort['_stale_age_sec'] // 60}m old)"
@@ -601,7 +750,9 @@ def zone_snapshot(
         else:
             snap["data_sources_failed"].append(err or "GFW effort: no data")
 
-        gfw_fleet_key = f"gfw_fleet:{_grid_key(lat, lon)}"
+        gfw_fleet_key = (
+            f"gfw_fleet:{_grid_key(lat, lon)}:{radius_deg}:{gfw_start}:{gfw_end}"
+        )
         fleet, err = results.get("gfw_fleet", (None, "GFW fleet: not run"))
         if fleet and not err and "error" in fleet:
             err = f"GFW fleet: {fleet['error']}"
@@ -613,9 +764,36 @@ def zone_snapshot(
                 fleet = stale
                 got_fleet = True
         if got_fleet:
+            fleet_start = fleet.get("start_date") or gfw_start
+            fleet_end = fleet.get("end_date") or gfw_end
             snap["vessel_count"] = fleet.get("vessel_count")
             snap["fleet_by_flag"] = fleet.get("by_flag", {})
             snap["fleet_by_gear"] = fleet.get("by_gear", {})
+            fleet_meta = {
+                "source": fleet.get("source", "Global Fishing Watch fleet grouping report"),
+                "observed_from": fleet_start,
+                "observed_to": fleet_end,
+                "statistic": "Unique vessel IDs represented in fleet groupings",
+            }
+            if fleet.get("_stale"):
+                fleet_meta["note"] = (
+                    f"Cached result read {fleet['_stale_age_sec'] // 60} min ago"
+                )
+                snap["data_sources_failed"].append(
+                    err or "GFW fleet: current request returned no usable value"
+                )
+            if snap.get("vessel_count") is not None:
+                snap["observation_metadata"]["vessel_count"] = fleet_meta
+            if snap.get("fleet_by_flag"):
+                snap["observation_metadata"]["fleet_by_flag"] = {
+                    **fleet_meta,
+                    "statistic": "Vessel count grouped by reported flag",
+                }
+            if snap.get("fleet_by_gear"):
+                snap["observation_metadata"]["fleet_by_gear"] = {
+                    **fleet_meta,
+                    "statistic": "Vessel count grouped by reported gear type",
+                }
             if fleet.get("_stale"):
                 snap["data_sources_used"].append(
                     f"Global Fishing Watch (fleet, cached {fleet['_stale_age_sec'] // 60}m old)"
@@ -626,7 +804,7 @@ def zone_snapshot(
         else:
             snap["data_sources_failed"].append(err or "GFW fleet: no data")
     else:
-        snap["data_sources_failed"].append("GFW: skipped (include_gfw=False)")
+        snap["data_sources_skipped"].append("GFW: excluded by include_gfw=false")
 
     # 5) Near-term wave context (NOW + next-48h peak) from the point
     # forecast. The snapshot's historical wave_max is the max over the
@@ -640,10 +818,32 @@ def zone_snapshot(
         n48_blk = pf.get("next48h") or {}
         if now_blk.get("wave_height_m") is not None:
             snap["wave_now_m"] = now_blk["wave_height_m"]
+            wave_meta = {
+                "source": pf.get("source", "Open-Meteo Marine point forecast"),
+                "observed_at": now_blk.get("time"),
+                "statistic": "Point forecast value",
+            }
+            snap["observation_metadata"]["wave_now_m"] = wave_meta
+            snap["observation_metadata"]["wave_height_m"] = dict(wave_meta)
+            snap["data_sources_used"].append(
+                "Open-Meteo Marine (point wave forecast)"
+            )
+        else:
+            snap["data_sources_failed"].append(
+                "Open-Meteo point forecast: wave_height_m unavailable"
+            )
         if n48_blk.get("wave_max_m") is not None:
             snap["wave_peak_48h_m"] = n48_blk["wave_max_m"]
-    except Exception:  # noqa: BLE001
-        pass  # ocean agent falls back to the labelled 30-day window max
+            snap["observation_metadata"]["wave_peak_48h_m"] = {
+                "source": pf.get("source", "Open-Meteo Marine point forecast"),
+                "observed_from": now_blk.get("time"),
+                "valid_period": "Next 48 hours",
+                "statistic": "Maximum forecast wave height in the horizon",
+            }
+    except Exception as exc:  # noqa: BLE001
+        snap["data_sources_failed"].append(
+            f"Open-Meteo point forecast: {type(exc).__name__}: {exc}"
+        )
 
     # No synthetic PFZ score is generated. Official INCOIS PFZ advisories are
     # exposed separately by /api/v1/voyage; combining generic SST,

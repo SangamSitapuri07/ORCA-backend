@@ -1,20 +1,19 @@
 """
 Verify your .env file has working credentials for BOTH services.
 
-This script does NOT print or send your password/token anywhere.
-It only reads them from the .env file and uses them to call
-the real APIs to prove they work.
+This script never prints your password or token. It reads backend environment
+configuration (and optional local .env), then sends credentials only to the
+configured GFW/MOSDAC authentication endpoints for measured checks.
 
-Run on YOUR machine (not sandbox):
-    cd $HOME\\Desktop\\orca-setup\\SIH
-    python verify_credentials.py
+Run from the ORCA-backend project root:
+    python tools/verify_credentials.py
 """
 import sys as _sys, pathlib as _pathlib  # tools/ se bhi repo-root imports kaam karein
 _sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parents[1]))
 
 import os
-import sys
 import urllib.error
+from datetime import date, timedelta
 from pathlib import Path
 
 
@@ -54,8 +53,9 @@ def main():
     print("1) GFW API token (Global Fishing Watch)")
     print("─" * 70)
     gfw_token = env.get("GFW_API_TOKEN", "")
+    gfw_live_ok = False
     if not gfw_token:
-        print("  ❌ GFW_API_TOKEN is NOT set in .env")
+        print("  ❌ GFW_API_TOKEN is not configured in the environment or .env")
         print("     Add this line to .env (paste your real token):")
         print("         GFW_API_TOKEN=eyJhbGc...your_full_token...")
     else:
@@ -76,10 +76,13 @@ def main():
         try:
             import json
             import urllib.request
+            end_date = date.today() - timedelta(days=4)
+            start_date = end_date - timedelta(days=29)
+            date_range = f"{start_date.isoformat()}%2C{end_date.isoformat()}"
             url = (
                 "https://gateway.api.globalfishingwatch.org/v3/4wings/report"
                 "?datasets%5B0%5D=public-global-fishing-effort%3Alatest"
-                "&date-range=2026-08-03%2C2026-09-02"
+                f"&date-range={date_range}"
                 "&format=JSON"
                 "&spatial-resolution=LOW"
                 "&temporal-resolution=ENTIRE"
@@ -100,11 +103,14 @@ def main():
             )
             with urllib.request.urlopen(req, timeout=30) as r:
                 data = json.loads(r.read().decode("utf-8"))
-            total = data.get("total", "?")
-            n_entries = len(data.get("entries", []))
-            print(f"  ✅ GFW API call succeeded!")
-            print(f"     Total fishing hours: {total}")
-            print(f"     Number of entries: {n_entries}")
+            from pipeline.gfw import _parse_effort_report
+            hours, vessel_ids, entries = _parse_effort_report(data)
+            gfw_live_ok = True
+            print("  ✅ GFW API call succeeded!")
+            print(f"     Measured fishing hours in entries: {hours}")
+            print(f"     Unique vessel IDs: {len(vessel_ids)}")
+            print(f"     Top-level result groups: {data.get('total', '?')}")
+            print(f"     Top-level entries: {len(entries)}")
         except urllib.error.HTTPError as e:
             body_text = e.read().decode("utf-8", errors="replace")[:300]
             print(f"  ❌ GFW returned HTTP {e.code}: {e.reason}")
@@ -125,44 +131,54 @@ def main():
     print("─" * 70)
     user = env.get("MOSDAC_USERNAME", "")
     pwd = env.get("MOSDAC_PASSWORD", "")
+    mosdac_live_ok = False
     if not user or not pwd:
-        print("  ❌ MOSDAC_USERNAME or MOSDAC_PASSWORD is NOT set in .env")
+        print("  ❌ MOSDAC_USERNAME or MOSDAC_PASSWORD is not configured in the environment or .env")
         print("     Add these two lines to .env (paste your real values):")
         print("         MOSDAC_USERNAME=your.email@example.com")
         print("         MOSDAC_PASSWORD=your_mosdac_password")
     else:
-        print(f"  ✓ MOSDAC_USERNAME = {user}")
-        print(f"  ✓ MOSDAC_PASSWORD = ({len(pwd)} chars, hidden)")
+        print("  ✓ MOSDAC_USERNAME is set (value hidden)")
+        print(f"  ✓ MOSDAC_PASSWORD is set ({len(pwd)} chars, hidden)")
 
         # Try the actual login
         print()
         print("  Testing MOSDAC login...")
+        previous_user = os.environ.get("MOSDAC_USERNAME")
+        previous_password = os.environ.get("MOSDAC_PASSWORD")
+        os.environ["MOSDAC_USERNAME"] = user
+        os.environ["MOSDAC_PASSWORD"] = pwd
         try:
-            # Add the project root to sys.path so 'pipeline' imports
-            project_root = str(Path(__file__).parent.resolve())
-            if project_root not in sys.path:
-                sys.path.insert(0, project_root)
             from pipeline.mosdac_auth import quick_check
             ok = quick_check()
             if ok:
+                mosdac_live_ok = True
                 print("  ✅ MOSDAC login works!")
             else:
                 print("  ❌ MOSDAC login failed — see error above")
         except ImportError:
             print("  ⚠️  Could not import pipeline.mosdac_auth.")
-            print("     Run this from the project root: cd $HOME\\Desktop\\orca-setup\\SIH")
+            print("     Run this command from the ORCA-backend project root.")
         except Exception as e:
             print(f"  ❌ MOSDAC test failed: {type(e).__name__}: {e}")
+        finally:
+            if previous_user is None:
+                os.environ.pop("MOSDAC_USERNAME", None)
+            else:
+                os.environ["MOSDAC_USERNAME"] = previous_user
+            if previous_password is None:
+                os.environ.pop("MOSDAC_PASSWORD", None)
+            else:
+                os.environ["MOSDAC_PASSWORD"] = previous_password
 
     # ──── Summary ────
     print()
     print("=" * 70)
     print("  Summary")
     print("=" * 70)
-    gfw_ok = bool(gfw_token) and not gfw_token.startswith("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6")
-    mosdac_ok = bool(user) and bool(pwd)
-    if gfw_ok and mosdac_ok:
-        print("  ✅ Both credentials are set. Restart your FastAPI backend to apply.")
+    all_checks_passed = gfw_live_ok and mosdac_live_ok
+    if all_checks_passed:
+        print("  ✅ Both authenticated live checks passed. Restart FastAPI to apply.")
         print()
         print("     Terminal 1:")
         print("         Ctrl+C   (to stop the old uvicorn)")
@@ -173,9 +189,10 @@ def main():
         print("         You should see 'Global Fishing Watch (effort + fleet)'")
         print("         in the 'Data sources used' list (no longer Failed).")
     else:
-        print("  ⚠️  Some credentials are missing. Fix them above and re-run.")
+        print("  ⚠️  One or more authenticated live checks did not pass. See the measured result above.")
     print()
+    return 0 if all_checks_passed else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -67,7 +67,7 @@ class RouteVerdictCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
-                  '${advisory.pointsKnown}/${advisory.totalPoints} pts live',
+                  '${advisory.pointsKnown}/${advisory.totalPoints} with data',
                   style: const TextStyle(
                     color: Colors.white70,
                     fontSize: 11,

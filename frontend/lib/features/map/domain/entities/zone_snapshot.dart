@@ -1,5 +1,19 @@
 import '../../../../core/cache/staleness.dart';
 
+class ZoneObservationMetadata {
+  final String source;
+  final String timeLabel;
+  final String? statistic;
+  final String? note;
+
+  const ZoneObservationMetadata({
+    required this.source,
+    required this.timeLabel,
+    this.statistic,
+    this.note,
+  });
+}
+
 /// Single ocean spot snapshot. Missing provider measurements stay nullable.
 class ZoneSnapshot {
   final double lat;
@@ -20,6 +34,7 @@ class ZoneSnapshot {
   final double? nearestHarbourDistKm;
   final List<String> sources;
   final List<String> sourcesFailed;
+  final Map<String, ZoneObservationMetadata> observations;
   final DateTime timestamp;
   final StalenessInfo staleness;
 
@@ -42,6 +57,7 @@ class ZoneSnapshot {
     this.nearestHarbourDistKm,
     required this.sources,
     required this.sourcesFailed,
+    this.observations = const <String, ZoneObservationMetadata>{},
     required this.timestamp,
     required this.staleness,
   });

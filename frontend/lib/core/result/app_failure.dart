@@ -6,7 +6,7 @@ sealed class AppFailure {
   /// Offline failure.
   const factory AppFailure.offline([String message]) = OfflineFailure;
 
-  /// Server down / connection refused failure.
+  /// Legacy typed connection failure; does not assert that the server is down.
   const factory AppFailure.serverDown([String message]) = ServerDownFailure;
 
   /// Specific upstream source down (e.g. INCOIS / MOSDAC).
@@ -15,7 +15,7 @@ sealed class AppFailure {
     required String reason,
   }) = SourceDownFailure;
 
-  /// Stale cached data returned when live fetch failed.
+  /// Stale cached data returned when the current backend request failed.
   const factory AppFailure.stale({
     required Duration age,
     required String message,
@@ -39,7 +39,7 @@ final class OfflineFailure extends AppFailure {
 }
 
 final class ServerDownFailure extends AppFailure {
-  const ServerDownFailure([super.message = 'ORCA Box server is unreachable. Check network/IP.']);
+  const ServerDownFailure([super.message = 'Could not connect to ORCA Box. Check the network and server address.']);
 }
 
 final class SourceDownFailure extends AppFailure {
@@ -59,7 +59,7 @@ final class BadPayloadFailure extends AppFailure {
 }
 
 final class TimeoutFailure extends AppFailure {
-  const TimeoutFailure([super.message = 'Request timed out after 15 seconds.']);
+  const TimeoutFailure([super.message = 'The request timed out.']);
 }
 
 final class UnknownFailure extends AppFailure {

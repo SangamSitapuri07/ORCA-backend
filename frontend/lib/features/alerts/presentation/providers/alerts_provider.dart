@@ -7,6 +7,7 @@ import '../../data/datasources/alerts_remote.dart';
 import '../../data/dto/alert_dto.dart';
 import '../../data/repositories/alerts_repo_impl.dart';
 import '../../domain/entities/alert_item.dart';
+import '../../domain/entities/alerts_snapshot.dart';
 import '../../domain/repositories/alerts_repo.dart';
 import '../../domain/usecases/get_alerts.dart';
 
@@ -29,7 +30,7 @@ final getAlertsUseCaseProvider = Provider<GetAlertsUseCase>((ref) {
 });
 
 /// StateNotifier managing active marine alerts with SSE subscription.
-class AlertsNotifier extends StateNotifier<AsyncValue<List<AlertItem>>> {
+class AlertsNotifier extends StateNotifier<AsyncValue<AlertsSnapshot>> {
   final Ref _ref;
   final GetAlertsUseCase _useCase;
 
@@ -43,11 +44,11 @@ class AlertsNotifier extends StateNotifier<AsyncValue<List<AlertItem>>> {
         if (data is Map<String, dynamic>) {
           final dto = AlertDto.fromJson(data);
           final incoming = dto.toEntity();
-          final current = state.valueOrNull ?? <AlertItem>[];
-          state = AsyncValue.data(<AlertItem>[
+          final current = state.valueOrNull ?? const AlertsSnapshot(alerts: <AlertItem>[]);
+          state = AsyncValue.data(current.withAlerts(<AlertItem>[
             incoming,
-            ...current.where((alert) => alert.id != incoming.id),
-          ]);
+            ...current.alerts.where((alert) => alert.id != incoming.id),
+          ]));
         }
       });
     });
@@ -80,11 +81,11 @@ class AlertsNotifier extends StateNotifier<AsyncValue<List<AlertItem>>> {
     );
     if (result.isOk) {
       final simulated = result.valueOrNull!;
-      final current = state.valueOrNull ?? <AlertItem>[];
-      state = AsyncValue.data(<AlertItem>[
+      final current = state.valueOrNull ?? const AlertsSnapshot(alerts: <AlertItem>[]);
+      state = AsyncValue.data(current.withAlerts(<AlertItem>[
         simulated,
-        ...current.where((alert) => alert.id != simulated.id),
-      ]);
+        ...current.alerts.where((alert) => alert.id != simulated.id),
+      ]));
       return true;
     }
     state = AsyncValue.error(
@@ -96,7 +97,7 @@ class AlertsNotifier extends StateNotifier<AsyncValue<List<AlertItem>>> {
 }
 
 /// Provider managing active marine alerts list.
-final alertsProvider = StateNotifierProvider<AlertsNotifier, AsyncValue<List<AlertItem>>>((ref) {
+final alertsProvider = StateNotifierProvider<AlertsNotifier, AsyncValue<AlertsSnapshot>>((ref) {
   final useCase = ref.watch(getAlertsUseCaseProvider);
   return AlertsNotifier(ref, useCase);
 });

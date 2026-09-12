@@ -77,9 +77,9 @@ def cached(key: str, ttl_sec: float, fn: Callable[[], T],
 #
 # `cached()` above is about not re-fetching within a TTL. This is a
 # different problem: several ORCA sources (NOAA ERDDAP, OC-CCI, MOSDAC,
-# INCOIS, GFW) are flaky *live* satellite/AIS feeds that legitimately
-# fail on any given click (cloud cover, a slow upstream server, a rate
-# limit). Today a failure there is a hard "source failed" card even
+# INCOIS, GFW) may return no valid value, a measured transport/HTTP error,
+# or a rate limit on a given request. A failure there is a hard
+# "source failed" card even
 # when we successfully fetched the SAME point an hour ago.
 #
 # This keeps a separate, long-lived "last known good" value per key.
@@ -101,7 +101,7 @@ def get_last_good(key: str, max_age_sec: float) -> Any | None:
     """Return the last known good value for `key` if it's no older than
     `max_age_sec`, else None. Dict values get `_stale`/`_stale_age_sec`
     added (on a copy — the stored original is never mutated) so the
-    caller/UI can never mistake this for a fresh live reading."""
+    caller/UI can never mistake this for a current reading."""
     with _stale_lock:
         ent = _stale_store.get(key)
     if ent is None:

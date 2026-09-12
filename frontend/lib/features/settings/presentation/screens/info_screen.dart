@@ -239,7 +239,7 @@ class InfoScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 16),
 
-            // 4. Source Catalog Live Health View (§11)
+            // 4. Source catalog configuration/capability report (§11)
             healthState.when(
               data: (snapshot) => SourceCatalogHealthView(liveSources: snapshot.dataSources),
               loading: () => const Center(

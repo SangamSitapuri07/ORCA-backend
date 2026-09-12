@@ -392,15 +392,34 @@ def build_advisory(
     forecast_source = point_fc.get("source") if point_fc else None
     forecast_time = now_f.get("time") or point_fc.get("fetched_at") or started.isoformat(timespec="seconds")
     snapshot_time = snap.get("fetched_at") or started.isoformat(timespec="seconds")
+    observation_metadata = snap.get("observation_metadata") or {}
+    sst_metadata = observation_metadata.get("sea_temp_c") or {}
+    chlorophyll_metadata = observation_metadata.get("chlorophyll_mg_m3") or {}
 
-    def variable_detail(value, unit: str, threshold, status: str, source, observed_at, direction=None):
+    def variable_detail(
+        value,
+        unit: str,
+        threshold,
+        status: str,
+        source,
+        observed_at=None,
+        direction=None,
+        observed_from=None,
+        observed_to=None,
+        note=None,
+    ):
+        available = value is not None
         return {
             "value": value,
             "unit": unit,
             "threshold": threshold,
-            "status": status if value is not None else "unavailable",
-            "source": source if value is not None else None,
-            "observed_at": observed_at if value is not None else None,
+            "status": status if available else "unavailable",
+            "source": source if available else None,
+            "observed_at": observed_at if available else None,
+            "observed_from": observed_from if available else None,
+            "observed_to": observed_to if available else None,
+            "retrieved_at": snapshot_time if available else None,
+            "note": note if available else None,
             "direction": direction,
         }
 
@@ -413,14 +432,35 @@ def build_advisory(
         "wave_height": variable_detail(wave_now, "m", 2.5, wave_status, forecast_source, forecast_time),
         "wind_speed": variable_detail(wind_now, "kn", 20.0, wind_status, forecast_source, forecast_time),
         "wind_gusts": variable_detail(gust_now, "kn", 28.0, gust_status, forecast_source, forecast_time),
-        "sea_surface_temp": variable_detail(sst_c, "°C", None, "context_only", sst_source, snapshot_time),
+        "sea_surface_temp": variable_detail(
+            sst_c,
+            "°C",
+            None,
+            "context_only",
+            sst_metadata.get("source") or sst_source,
+            sst_metadata.get("observed_at") or (
+                forecast_time if snap_sst is None else (
+                    None if sst_metadata.get("observed_from") else snapshot_time
+                )
+            ),
+            observed_from=sst_metadata.get("observed_from"),
+            observed_to=sst_metadata.get("observed_to"),
+            note=sst_metadata.get("note"),
+        ),
         "ocean_current": variable_detail(
             current_kn, "kn", 3.0, current_status, forecast_source, forecast_time,
             _deg_to_compass(now_f.get("current_dir_deg")),
         ),
         "chlorophyll": variable_detail(
-            chl, "mg/m³", None, chl_status, snap.get("chlorophyll_source"),
-            snap.get("chlorophyll_date") or snapshot_time,
+            chl,
+            "mg/m³",
+            None,
+            chl_status,
+            chlorophyll_metadata.get("source") or snap.get("chlorophyll_source"),
+            chlorophyll_metadata.get("observed_at") or snap.get("chlorophyll_date"),
+            observed_from=chlorophyll_metadata.get("observed_from"),
+            observed_to=chlorophyll_metadata.get("observed_to"),
+            note=chlorophyll_metadata.get("note") or snap.get("chlorophyll_note"),
         ),
     }
 

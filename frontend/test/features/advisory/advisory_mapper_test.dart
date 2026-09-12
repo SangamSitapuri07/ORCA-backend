@@ -37,7 +37,7 @@ void main() {
         'data_coverage': {
           'known': 4,
           'total': 5,
-          'sources_failed': ['ESA OC-CCI (Cloud-masked)']
+          'sources_failed': ['ESA OC-CCI (no valid pixels)']
         },
         'timestamp': '2026-09-12T08:30:00Z'
       };
@@ -55,8 +55,67 @@ void main() {
       expect(entity.variables['wave_height']?.status, equals('caution'));
       expect(entity.hourlyChart.length, equals(1));
       expect(entity.sources.length, equals(2));
-      expect(entity.sourcesFailed.first, contains('Cloud-masked'));
+      expect(entity.sourcesFailed.first, contains('no valid pixels'));
       expect(entity.knownSources, equals(4));
+    });
+
+    test('formats backend observation windows without replacing them with receipt time', () {
+      final dto = AdvisoryDto.fromJson({
+        'verdict': 'unknown',
+        'variable_details': {
+          'sea_surface_temp': {
+            'value': 28.4,
+            'unit': '°C',
+            'status': 'context_only',
+            'source': 'Open-Meteo Marine API',
+            'observed_from': '2026-08-01',
+            'observed_to': '2026-08-31',
+            'retrieved_at': '2026-09-12T08:30:00Z',
+          },
+        },
+      });
+
+      final entity = dto.toEntity(
+        StalenessInfo.fromDateTime(DateTime.now()),
+      );
+
+      expect(entity.variables['sea_surface_temp']?.time, '2026-08-01 to 2026-08-31');
+      expect(entity.variables['sea_surface_temp']?.source, 'Open-Meteo Marine API');
+    });
+
+    test('does not calculate hourly safety state when backend omits it', () {
+      final dto = AdvisoryDto.fromJson({
+        'verdict': 'unknown',
+        'hourly_chart': {
+          'labels': ['09-12T06:00'],
+          'wave_m': [5.0],
+          'wind_kn': [40.0],
+        },
+      });
+
+      final entity = dto.toEntity(
+        StalenessInfo.fromDateTime(DateTime.now()),
+      );
+
+      expect(entity.hourlyChart.single.state, 'unknown');
+    });
+
+    test('retains backend-owned hourly safety state', () {
+      final dto = AdvisoryDto.fromJson({
+        'verdict': 'caution',
+        'hourly_chart': {
+          'labels': ['09-12T06:00'],
+          'wave_m': [1.0],
+          'wind_kn': [10.0],
+          'state': ['caution'],
+        },
+      });
+
+      final entity = dto.toEntity(
+        StalenessInfo.fromDateTime(DateTime.now()),
+      );
+
+      expect(entity.hourlyChart.single.state, 'caution');
     });
 
     test('Tolerates missing optional fields without crashing (§4)', () {

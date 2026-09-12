@@ -116,29 +116,22 @@ class AppLocalizationsHi extends AppLocalizations {
   String get probeFishingEffort => 'मछली पकड़ने की गतिविधि';
 
   @override
-  String get aiAgentsTitle => '10-एजेंट सहयोगी प्रणाली';
+  String get aiAgentsTitle => '11-चरण सहयोगी प्रणाली';
 
   @override
-  String get aiRunAnalysis => '10-एजेंट विश्लेषण चलाएं';
+  String get aiRunAnalysis => '11-चरण विश्लेषण चलाएं';
 
   @override
   String get aiRunning => 'एजेंट्स मिलकर विश्लेषण कर रहे हैं...';
 
   @override
-  String get aiCollaborationTrace => 'एजेंट सहयोग लाइव ट्रेस';
+  String get aiCollaborationTrace => 'बैकएंड एजेंट ट्रेस';
 
   @override
   String get aiOrchestrationSynthesis => 'अंतिम निर्णय एवं निष्कर्ष';
 
-  @override
-  String get aiChatTitle => 'समुद्री सलाहकार सहायक';
 
-  @override
-  String get aiChatUnavailable =>
-      'एज सर्वर संसाधनों की बचत हेतु चैट सुविधा अभी बंद है।';
 
-  @override
-  String get aiChatInputHint => 'समुद्री मौसम के बारे में पूछें...';
 
   @override
   String get alertsTitle => 'सक्रिय समुद्री चेतावनी';
@@ -221,5 +214,5 @@ class AppLocalizationsHi extends AppLocalizations {
 
   @override
   String get offlineBanner =>
-      'आप ऑफ़लाइन हैं। पिछली सत्यापित सलाह दिखाई जा रही है।';
+      'आप ऑफ़लाइन हैं। उपलब्ध होने पर कैश की गई सलाह उसके मूल समय के साथ दिखाई जा रही है।';
 }

@@ -22,11 +22,18 @@ class HourlyChart extends StatelessWidget {
     final waveSpots = <FlSpot>[];
     final windSpots = <FlSpot>[];
 
+    var maxDisplayValue = 4.5;
     for (int i = 0; i < hourlyPoints.length; i++) {
       waveSpots.add(FlSpot(i.toDouble(), hourlyPoints[i].waveM));
-      // scale wind to chart display (divide by 10 for dual display)
-      windSpots.add(FlSpot(i.toDouble(), hourlyPoints[i].windKn / 10.0));
+      // Display-only scaling keeps both units legible on one compact chart.
+      final scaledWind = hourlyPoints[i].windKn / 10.0;
+      windSpots.add(FlSpot(i.toDouble(), scaledWind));
+      if (hourlyPoints[i].waveM > maxDisplayValue) {
+        maxDisplayValue = hourlyPoints[i].waveM;
+      }
+      if (scaledWind > maxDisplayValue) maxDisplayValue = scaledWind;
     }
+    final maxY = (maxDisplayValue * 1.1).ceilToDouble();
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -42,7 +49,7 @@ class HourlyChart extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text(
-                'HOURLY WAVE & WIND TREND',
+                '48-HOUR WAVE & WIND FORECAST',
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w800,
@@ -54,7 +61,7 @@ class HourlyChart extends StatelessWidget {
                 children: [
                   _legendItem('Wave (m)', VerdictColors.info),
                   const SizedBox(width: 12),
-                  _legendItem('Wind (×10 kn)', VerdictColors.caution),
+                  _legendItem('Wind (kn ÷ 10)', VerdictColors.caution),
                 ],
               ),
             ],
@@ -68,20 +75,10 @@ class HourlyChart extends StatelessWidget {
                   show: true,
                   drawVerticalLine: false,
                   horizontalInterval: 1.0,
-                  getDrawingHorizontalLine: (value) {
-                    if (value == 2.5) {
-                      // Caution Threshold Line
-                      return const FlLine(
-                        color: VerdictColors.caution,
-                        strokeWidth: 1.5,
-                        dashArray: [4, 4],
-                      );
-                    }
-                    return FlLine(
-                      color: Colors.white10,
-                      strokeWidth: 1.0,
-                    );
-                  },
+                  getDrawingHorizontalLine: (value) => FlLine(
+                    color: Colors.white10,
+                    strokeWidth: 1.0,
+                  ),
                 ),
                 titlesData: FlTitlesData(
                   topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
@@ -121,7 +118,7 @@ class HourlyChart extends StatelessWidget {
                 minX: 0,
                 maxX: (hourlyPoints.length - 1).toDouble(),
                 minY: 0,
-                maxY: 4.5,
+                maxY: maxY,
                 lineBarsData: [
                   // Wave Height Line
                   LineChartBarData(
@@ -153,10 +150,10 @@ class HourlyChart extends StatelessWidget {
           const SizedBox(height: 8),
           const Row(
             children: [
-              Icon(Icons.info_outline, size: 12, color: VerdictColors.caution),
+              Icon(Icons.info_outline, size: 12, color: VerdictColors.info),
               SizedBox(width: 4),
               Text(
-                'Dashed yellow line indicates 2.5m small-craft caution threshold',
+                'Wind is scaled for display: chart value × 10 = knots',
                 style: TextStyle(fontSize: 10, color: OrcaTheme.textMuted),
               ),
             ],

@@ -1,68 +1,87 @@
-"""Tests for the INCOIS adapter (after the honest-availability rewrite).
-
-INCOIS OPeNDAP is unreliable in practice. The adapter:
-  - tries the OPeNDAP once with a 6s hard timeout
-  - returns {"value": ..., "source": "INCOIS OCM-2 (OPeNDAP)"} on success
-  - returns {"error": ..., "source": "INCOIS", "pfz_url": ...} on failure
-
-These tests verify the contract without requiring live network.
-"""
+"""Offline contract tests for the bounded INCOIS OPeNDAP adapter."""
 from __future__ import annotations
 
-from datetime import datetime
+import numpy as np
+import xarray as xr
 
 from pipeline.incois import (
     INCOIS_OPENDAP_BASE,
     INCOIS_PFZ_URL,
-    get_chlorophyll,
+    _try_opendap_chl,
     get_sst,
     status,
 )
 
 
-def test_incois_opendap_url_format():
-    """The known INCOIS OCM-2 OPeNDAP URL is correct format."""
+def _dataset_with_time() -> xr.Dataset:
+    return xr.Dataset(
+        data_vars={
+            "CHL": (
+                ("time", "lat", "lon"),
+                np.array([
+                    [[0.2, 0.3, 0.4], [0.4, 0.5, 0.6], [0.6, 0.7, 0.8]],
+                    [[0.8, 0.9, 1.0], [1.0, 1.1, 1.2], [1.2, 1.3, 1.4]],
+                ]),
+                {"units": "mg m^-3"},
+            ),
+        },
+        coords={
+            "time": np.array(["2026-08-10", "2026-08-14"], dtype="datetime64[D]"),
+            "lat": [18.8, 19.0, 19.2],
+            "lon": [72.6, 72.8, 73.0],
+        },
+    )
+
+
+def test_incois_catalog_urls_have_expected_hosts():
     assert INCOIS_OPENDAP_BASE.startswith("http://las.incois.gov.in")
     assert "Oceansat2-OCM" in INCOIS_OPENDAP_BASE
-
-
-def test_incois_pfz_url_is_public():
-    """INCOIS PFZ advisory is at a known stable URL."""
     assert INCOIS_PFZ_URL.startswith("https://www.incois.gov.in")
-    assert "PfzAdvisory" in INCOIS_PFZ_URL
 
 
-def test_status_recommends_alternatives():
-    """The status() helper should list alternatives for chlorophyll."""
-    s = status()
-    assert "recommendation" in s
-    assert "MOSDAC" in s["recommendation"]
-    assert "NOAA" in s["recommendation"]
+def test_status_describes_conditional_role_without_liveness_claim():
+    snapshot = status()
+    assert "conditional" in snapshot["role"].lower()
+    assert "checked per request" in snapshot["pfz_note"]
+    assert "working" not in snapshot["role"].lower()
 
 
-def test_get_chlorophyll_offline_returns_error_dict():
-    """Without network, should return an error dict (not crash)."""
-    result = get_chlorophyll(19.0, 72.8, "2020-05-01", timeout_sec=2.0)
-    # Either a real value (network OK) or an error dict
-    if result is not None:
-        assert "value" in result or "error" in result
-        if "error" in result:
-            # When error, we should also surface the PFZ URL for humans
-            assert "source" in result
-            assert "INCOIS" in result["source"]
+def test_opendap_selects_and_returns_actual_observation_date(monkeypatch):
+    monkeypatch.setattr(xr, "open_dataset", lambda *a, **k: _dataset_with_time())
+
+    result = _try_opendap_chl(19.0, 72.8, "2026-08-15", timeout_sec=2.0)
+
+    assert result is not None and "error" not in result
+    assert result["date"] == "2026-08-14"
+    assert result["value"] == 1.1
+    assert result["n_cells"] == 9
+    assert "selected observation date 2026-08-14" in result["note"]
 
 
-def test_get_sst_returns_error_or_data():
-    """SST endpoint not available, so expect error dict."""
+def test_opendap_rejects_unverifiable_time(monkeypatch):
+    no_time = xr.Dataset(
+        data_vars={"CHL": (("lat", "lon"), [[0.4, 0.5], [0.6, 0.7]])},
+        coords={"lat": [18.9, 19.1], "lon": [72.7, 72.9]},
+    )
+    monkeypatch.setattr(xr, "open_dataset", lambda *a, **k: no_time.copy())
+
+    result = _try_opendap_chl(19.0, 72.8, "2026-08-15", timeout_sec=2.0)
+
+    assert result is not None
+    assert "value" not in result
+    assert "time coordinate" in result["error"]
+
+
+def test_opendap_rejects_observation_outside_date_limit(monkeypatch):
+    monkeypatch.setattr(xr, "open_dataset", lambda *a, **k: _dataset_with_time())
+
+    result = _try_opendap_chl(19.0, 72.8, "2026-09-15", timeout_sec=2.0)
+
+    assert result is not None
+    assert "limit 7 days" in result["error"]
+
+
+def test_get_sst_reports_not_implemented_without_provider_claim():
     result = get_sst(19.0, 72.8)
-    assert result is None or "error" in result
-    if result and "error" in result:
-        # Should suggest Open-Meteo as alternative
-        assert "Open-Meteo" in result.get("alternative", "") or "Open-Meteo" in result.get("error", "")
-
-
-def test_datetime_input_doesnt_crash():
-    """Should accept datetime as well as string date."""
-    result = get_chlorophyll(19.0, 72.8, datetime(2020, 5, 1), timeout_sec=2.0)
-    if result is not None:
-        assert "value" in result or "error" in result
+    assert result is not None
+    assert result["error"] == "INCOIS SST is not implemented in the current ORCA adapter"

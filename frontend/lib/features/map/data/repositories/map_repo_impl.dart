@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import '../../../../core/cache/cache_service.dart';
 import '../../../../core/cache/staleness.dart';
+import '../../../../core/network/dio_failure_mapper.dart';
 import '../../../../core/result/app_failure.dart';
 import '../../../../core/result/result.dart';
 
@@ -50,25 +51,26 @@ class MapRepositoryImpl implements MapRepository {
         'nearest_harbour_dist_km': dto.nearestHarbourDistKm,
         'sources': dto.sources,
         'sources_failed': dto.sourcesFailed,
+        'observation_metadata': dto.observationMetadataJson,
         'timestamp': dto.timestampStr,
       };
       await _cacheService.put(cacheKey, jsonMap);
 
-      final staleness = StalenessInfo.fromDateTime(DateTime.now());
-      return Result.ok(dto.toEntity(staleness));
+      return Result.ok(
+        dto.toEntity(StalenessInfo.fromDateTime(dto.sourceTimestamp)),
+      );
     } on DioException catch (dioErr) {
       if (cached != null) {
         final dto = ZoneDto.fromJson(cached.data);
-        return Result.ok(dto.toEntity(cached.staleness));
+        final observedAt = dto.parsedSourceTimestamp ?? cached.fetchedAt;
+        return Result.ok(dto.toEntity(StalenessInfo.fromDateTime(observedAt)));
       }
-      if (dioErr.type == DioExceptionType.connectionTimeout) {
-        return const Result.err(AppFailure.timeout());
-      }
-      return const Result.err(AppFailure.serverDown());
+      return Result.err(mapDioFailure(dioErr));
     } catch (e) {
       if (cached != null) {
         final dto = ZoneDto.fromJson(cached.data);
-        return Result.ok(dto.toEntity(cached.staleness));
+        final observedAt = dto.parsedSourceTimestamp ?? cached.fetchedAt;
+        return Result.ok(dto.toEntity(StalenessInfo.fromDateTime(observedAt)));
       }
       return Result.err(AppFailure.unknown(e.toString()));
     }
@@ -80,11 +82,7 @@ class MapRepositoryImpl implements MapRepository {
       final dto = await _remoteDataSource.getGeoLayers();
       return Result.ok(dto.toEntity());
     } on DioException catch (error) {
-      if (error.type == DioExceptionType.connectionTimeout ||
-          error.type == DioExceptionType.receiveTimeout) {
-        return const Result.err(AppFailure.timeout());
-      }
-      return const Result.err(AppFailure.serverDown());
+      return Result.err(mapDioFailure(error));
     } catch (error) {
       return Result.err(AppFailure.unknown(error.toString()));
     }

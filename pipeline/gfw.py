@@ -118,7 +118,7 @@ _GFW_CACHE_TTL_SEC = 24 * 3600  # 24 h (B15: the 30-day effort aggregate
 # Root cause of the "429 keeps coming back even after our 120 s pause"
 # loop (2026-09): both the success cache AND the 429 cooldown lived in
 # process memory only — every backend restart wiped both, the prewarm
-# immediately re-burned calls into an already-angry server, and the
+# immediately repeated calls during the same measured HTTP 429 window, and the
 # loop never escaped. State now lives in data/gfw_cache.json:
 #   entries            → success cache (same 6 h TTL, restart-proof)
 #   rate_limited_until → the 429 cooldown timestamp (restart-proof)
@@ -212,12 +212,12 @@ def _request_with_burst_retry(url: str, tok: str, method: str, body: dict | None
                               timeout: int = 60, retries: int = 1) -> dict | None:
     """One in-band retry when a 429 is clearly BURST limiting (headers say
     the daily quota is fine). The retry waits within the 35 s job budget so
-    a single angry minute doesn't turn into a failed source for the user.
+    a measured burst-limit window does not immediately become a failed source.
 
     Daily-cap 429s are NOT retried — the server said "come back tomorrow".
 
     Anti-pile-up (2026-09-07 night log): when the per-minute limiter is
-    angry, EVERY first attempt 429s. The old code gave each call its own
+    active, every first attempt returns 429. The old code gave each call its own
     15-22 s in-band wait — with rapid map clicks that queued into minutes
     of sleeps and pushed /reason past its 110 s deadline. Now each burst
     429 is a "strike": strikes widen the inter-call gap for 5 minutes,
@@ -239,7 +239,7 @@ def _request_with_burst_retry(url: str, tok: str, method: str, body: dict | None
             raise
         strikes = _note_burst_strike()
         if strikes >= _BURST_MAX_STRIKES:
-            print(f"[GFW] burst limiter still angry ({strikes} strikes in a row) — "
+            print(f"[GFW] burst limit persisted ({strikes} consecutive HTTP 429 responses) — "
                   "failing fast into the shared cooldown instead of sleeping again",
                   file=sys.stderr)
             raise
@@ -262,7 +262,7 @@ _MIN_CALL_GAP_SEC = 6.0  # bumped 4s→6s (2026-09-07): still saw burst 429s
 _last_call_ts = 0.0
 
 # Adaptive anti-pile-up state (see _request_with_burst_retry): while the
-# per-minute limiter is angry, the gap between GFW calls widens to give
+# per-minute limit is active, the gap between GFW calls widens to give
 # GFW's burst window room to cool, and strikes decide when a call stops
 # paying for an in-band retry.
 _BURST_MAX_STRIKES = 3
@@ -295,7 +295,7 @@ def _throttle() -> None:
         gap = _MIN_CALL_GAP_SEC
         now = time.time()
         if now < _ADAPTIVE_GAP_UNTIL and _ADAPTIVE_GAP_SEC > gap:
-            gap = _ADAPTIVE_GAP_SEC  # burst window angry — space calls out
+            gap = _ADAPTIVE_GAP_SEC  # active 429 window—space calls out
         wait = gap - (now - _last_call_ts)
         if wait > 0:
             time.sleep(wait)

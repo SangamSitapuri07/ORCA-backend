@@ -103,7 +103,7 @@ def _fetch_token(user, pwd):
             "then re-run this ONCE."
         )
     if r.status_code == 503:
-        raise MosdacAuthError("MOSDAC service unavailable (maintenance?). Try later.")
+        raise MosdacAuthError("MOSDAC gettoken returned HTTP 503")
     if r.status_code != 200:
         raise MosdacAuthError("gettoken HTTP %s: %s" % (r.status_code, r.text[:200]))
 
@@ -191,7 +191,7 @@ def quick_check():
     print("=" * 66)
     try:
         user = os.environ.get("MOSDAC_USERNAME", "")
-        print("  user:", user or "(not set)")
+        print("  user:", "configured (hidden)" if user else "(not set)")
         print("  asking for token…")
         s = login()
     except MosdacAuthError as e:
@@ -199,16 +199,35 @@ def quick_check():
         return False
     print("  OK token received (access + refresh). SSO fight skipped — using official API. ✅")
 
-    # search needs NO token — proves datasets are reachable for us
+    # Search needs no token, but it verifies that the configured datasets are
+    # reachable in this runtime rather than relying on a fixed historical date.
+    from datetime import date, timedelta
+    end = date.today() - timedelta(days=3)
+    start = end - timedelta(days=7)
+    search_results = {}
     for did, note in ((DS_SST, "INSAT-3DR SST"), (DS_OCM_OC, "EOS-06 OCM chlorophyll")):
         try:
-            d = search(did, start="2026-08-25", end="2026-09-02", bbox=BBOX_GUJARAT, count="1")
+            d = search(
+                did,
+                start=start.isoformat(),
+                end=end.isoformat(),
+                bbox=BBOX_GUJARAT,
+                count="1",
+            )
             total = d.get("totalResults", "?")
-            print("  OK search %-18s (%s): %s files in Gujarat box, 25Aug-2Sep" % (did, note, total))
+            search_results[did] = True
+            print(
+                "  OK search %-18s (%s): %s files in Gujarat box, %s..%s"
+                % (did, note, total, start.isoformat(), end.isoformat())
+            )
         except Exception as e:
             print("  ! search failed for %s: %s" % (did, e))
-    print("  MOSDAC pipeline READY. Use search() + download_file() from this module. 🎣")
-    return True
+    ocm_search_ok = search_results.get(DS_OCM_OC, False)
+    if ocm_search_ok:
+        print("  MOSDAC authentication and OCM dataset search passed. ✅")
+    else:
+        print("  MOSDAC token was received, but the required OCM dataset search failed.")
+    return ocm_search_ok
 
 
 if __name__ == "__main__":

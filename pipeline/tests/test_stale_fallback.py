@@ -1,7 +1,8 @@
-"""Tests for ttlcache.remember_last_good / get_last_good — the
-last-known-good fallback added so a flaky live source (NOAA, OC-CCI,
-MOSDAC, INCOIS, GFW) degrades to a clearly-marked stale reading
-instead of a hard failure card."""
+"""Tests for ttlcache.remember_last_good / get_last_good.
+
+A measured current-request failure may use a clearly marked, recent
+last-known-good value instead of silently presenting it as fresh.
+"""
 import time
 
 import pytest

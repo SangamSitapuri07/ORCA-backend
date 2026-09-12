@@ -52,8 +52,8 @@ class OrchestratorSynthesis {
 class AgentReasoningResult {
   final String overallRisk;
   final String verdict;
-  final int knownSources;
-  final int totalSources;
+  final int knownStages;
+  final int totalStages;
   final List<String> sourcesFailed;
   final List<AgentTraceFinding> agents;
   final OrchestratorSynthesis orchestratorSynthesis;
@@ -62,8 +62,8 @@ class AgentReasoningResult {
   const AgentReasoningResult({
     required this.overallRisk,
     required this.verdict,
-    required this.knownSources,
-    required this.totalSources,
+    required this.knownStages,
+    required this.totalStages,
     required this.sourcesFailed,
     required this.agents,
     required this.orchestratorSynthesis,

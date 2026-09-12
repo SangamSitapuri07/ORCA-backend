@@ -1,5 +1,6 @@
 import '../../../../core/result/result.dart';
 import '../entities/alert_item.dart';
+import '../entities/alerts_snapshot.dart';
 import '../repositories/alerts_repo.dart';
 
 class GetAlertsUseCase {
@@ -7,7 +8,7 @@ class GetAlertsUseCase {
 
   GetAlertsUseCase(this._repository);
 
-  Future<Result<List<AlertItem>>> execute({
+  Future<Result<AlertsSnapshot>> execute({
     required double lat,
     required double lon,
     bool forceRefresh = false,

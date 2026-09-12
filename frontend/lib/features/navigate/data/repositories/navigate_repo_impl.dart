@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import '../../../../core/network/dio_failure_mapper.dart';
 import '../../../../core/result/app_failure.dart';
 import '../../../../core/result/result.dart';
 import '../../domain/entities/route_advisory.dart';
@@ -29,10 +30,7 @@ class NavigateRepositoryImpl implements NavigateRepository {
       );
       return Result.ok(dto.toEntity());
     } on DioException catch (dioErr) {
-      if (dioErr.type == DioExceptionType.connectionTimeout) {
-        return const Result.err(AppFailure.timeout());
-      }
-      return const Result.err(AppFailure.serverDown());
+      return Result.err(mapDioFailure(dioErr));
     } catch (e) {
       return Result.err(AppFailure.unknown(e.toString()));
     }
@@ -54,10 +52,7 @@ class NavigateRepositoryImpl implements NavigateRepository {
       );
       return Result.ok(dto.toEntity());
     } on DioException catch (dioErr) {
-      if (dioErr.type == DioExceptionType.connectionTimeout) {
-        return const Result.err(AppFailure.timeout());
-      }
-      return const Result.err(AppFailure.serverDown());
+      return Result.err(mapDioFailure(dioErr));
     } catch (e) {
       return Result.err(AppFailure.unknown(e.toString()));
     }

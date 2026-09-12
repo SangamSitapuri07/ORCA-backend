@@ -1,7 +1,9 @@
 import 'package:dio/dio.dart';
+import '../../../../core/network/dio_failure_mapper.dart';
 import '../../../../core/result/app_failure.dart';
 import '../../../../core/result/result.dart';
 import '../../domain/entities/alert_item.dart';
+import '../../domain/entities/alerts_snapshot.dart';
 import '../../domain/repositories/alerts_repo.dart';
 import '../datasources/alerts_remote.dart';
 
@@ -12,20 +14,16 @@ class AlertsRepositoryImpl implements AlertsRepository {
       : _remoteDataSource = remoteDataSource;
 
   @override
-  Future<Result<List<AlertItem>>> getActiveAlerts({
+  Future<Result<AlertsSnapshot>> getActiveAlerts({
     required double lat,
     required double lon,
     bool forceRefresh = false,
   }) async {
     try {
-      final dtos = await _remoteDataSource.getActiveAlerts(lat: lat, lon: lon);
-      return Result.ok(dtos.map((dto) => dto.toEntity()).toList());
+      final dto = await _remoteDataSource.getActiveAlerts(lat: lat, lon: lon);
+      return Result.ok(dto.toEntity());
     } on DioException catch (error) {
-      if (error.type == DioExceptionType.connectionTimeout ||
-          error.type == DioExceptionType.receiveTimeout) {
-        return const Result.err(AppFailure.timeout());
-      }
-      return const Result.err(AppFailure.serverDown());
+      return Result.err(mapDioFailure(error));
     } catch (error) {
       return Result.err(AppFailure.unknown(error.toString()));
     }
@@ -39,6 +37,8 @@ class AlertsRepositoryImpl implements AlertsRepository {
     try {
       final dto = await _remoteDataSource.simulateAlert(lat: lat, lon: lon);
       return Result.ok(dto.toEntity());
+    } on DioException catch (error) {
+      return Result.err(mapDioFailure(error));
     } catch (error) {
       return Result.err(AppFailure.unknown(error.toString()));
     }

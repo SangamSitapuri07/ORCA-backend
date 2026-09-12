@@ -5,6 +5,7 @@ import '../../../../core/theme/verdict_colors.dart';
 import '../../../../core/widgets/orca_app_bar.dart';
 import '../../../../core/widgets/toast.dart';
 import '../../../settings/presentation/providers/settings_provider.dart';
+import '../../domain/entities/alerts_snapshot.dart';
 import '../providers/alerts_provider.dart';
 import '../widgets/alert_card.dart';
 
@@ -50,7 +51,8 @@ class AlertsScreen extends ConsumerWidget {
         color: OrcaTheme.accent,
         backgroundColor: OrcaTheme.surface,
         child: alertsState.when(
-          data: (alerts) {
+          data: (snapshot) {
+            final alerts = snapshot.alerts;
             if (alerts.isEmpty) {
               return SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
@@ -68,33 +70,53 @@ class AlertsScreen extends ConsumerWidget {
                         child: const Icon(Icons.help_outline, color: VerdictColors.caution, size: 56),
                       ),
                       const SizedBox(height: 16),
-                      const Text(
-                        'No Alerts Available',
-                        style: TextStyle(
+                      Text(
+                        snapshot.checkIncomplete
+                            ? 'Alert Check Incomplete'
+                            : 'No Active Alerts Reported',
+                        style: const TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.bold,
                           color: Colors.white,
                         ),
                       ),
                       const SizedBox(height: 6),
-                      const Text(
-                        'This is not an all-clear. Refresh to ask the ORCA Box to check live weather and cyclone sources.',
+                      Text(
+                        snapshot.checkIncomplete
+                            ? snapshot.sourcesFailed.isNotEmpty
+                                ? 'Some providers could not be checked. This is not an all-clear.'
+                                : 'The backend did not return complete source/time evidence. This is not an all-clear.'
+                            : 'No alert was returned by the checked sources. Continue checking official bulletins.',
                         textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 13, color: OrcaTheme.textSecondary),
+                        style: const TextStyle(fontSize: 13, color: OrcaTheme.textSecondary),
                       ),
+                      if (snapshot.checkedAt != null) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          'Checked ${_checkedAtLabel(snapshot.checkedAt!)}',
+                          style: const TextStyle(fontSize: 11, color: OrcaTheme.textMuted),
+                        ),
+                      ],
+                      if (snapshot.checkIncomplete) ...[
+                        const SizedBox(height: 16),
+                        _AlertEvidencePanel(snapshot: snapshot),
+                      ],
                     ],
                   ),
                 ),
               );
             }
 
-            return ListView.builder(
+            return ListView(
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              itemCount: alerts.length,
-              itemBuilder: (context, index) {
-                return AlertCard(alert: alerts[index]);
-              },
+              children: [
+                if (snapshot.checkIncomplete) ...[
+                  _AlertEvidencePanel(snapshot: snapshot),
+                  const SizedBox(height: 10),
+                ],
+                ...alerts.map((alert) => AlertCard(alert: alert)),
+              ],
             );
           },
           loading: () => const Center(
@@ -125,6 +147,96 @@ class AlertsScreen extends ConsumerWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+String _checkedAtLabel(DateTime value) {
+  final local = value.toLocal();
+  String two(int number) => number.toString().padLeft(2, '0');
+  return '${two(local.hour)}:${two(local.minute)} · '
+      '${two(local.day)}/${two(local.month)}/${local.year}';
+}
+
+class _AlertEvidencePanel extends StatelessWidget {
+  final AlertsSnapshot snapshot;
+
+  const _AlertEvidencePanel({required this.snapshot});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: VerdictColors.caution.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: VerdictColors.caution.withValues(alpha: 0.35)),
+      ),
+      child: ExpansionTile(
+        leading: const Icon(Icons.warning_amber_rounded, color: VerdictColors.caution),
+        iconColor: VerdictColors.caution,
+        collapsedIconColor: OrcaTheme.textSecondary,
+        title: Text(
+          snapshot.sourcesFailed.isEmpty
+              ? 'Alert-check evidence incomplete'
+              : '${snapshot.sourcesFailed.length} provider check(s) unavailable',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        subtitle: Text(
+          snapshot.checkedAt == null
+              ? 'Tap for technical details'
+              : 'Checked ${_checkedAtLabel(snapshot.checkedAt!)} · tap for details',
+          style: const TextStyle(color: OrcaTheme.textMuted, fontSize: 11),
+        ),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+        children: [
+          if (snapshot.sourcesUsed.isEmpty && snapshot.sourcesFailed.isEmpty)
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'No per-source evaluation evidence was returned.',
+                style: TextStyle(color: OrcaTheme.textSecondary, fontSize: 11),
+              ),
+            ),
+          if (snapshot.checkedAt == null)
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Text(
+                  'Evaluation time was not returned.',
+                  style: TextStyle(color: OrcaTheme.textSecondary, fontSize: 11),
+                ),
+              ),
+            ),
+          for (final failure in snapshot.sourcesFailed)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('• ', style: TextStyle(color: VerdictColors.caution)),
+                  Expanded(
+                    child: Text(
+                      failure,
+                      style: const TextStyle(color: OrcaTheme.textSecondary, fontSize: 11),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (snapshot.sourcesUsed.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text(
+              'Checked successfully: ${snapshot.sourcesUsed.join(", ")}',
+              style: const TextStyle(color: OrcaTheme.textMuted, fontSize: 11),
+            ),
+          ],
+        ],
       ),
     );
   }

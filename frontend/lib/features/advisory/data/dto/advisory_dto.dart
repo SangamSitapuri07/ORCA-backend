@@ -70,6 +70,11 @@ class AdvisoryDto {
     );
   }
 
+  DateTime? get parsedSourceTimestamp => DateFormatter.parseIso(timestampStr);
+
+  DateTime get sourceTimestamp => parsedSourceTimestamp ??
+      DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+
   String _colorHex() {
     final raw = color?.toLowerCase();
     if (raw != null && raw.startsWith('#')) return raw;
@@ -90,6 +95,14 @@ class AdvisoryDto {
     variablesJson?.forEach((key, value) {
       if (value is! Map) return;
       final item = Map<String, dynamic>.from(value);
+      final observedAt = item['observed_at']?.toString();
+      final observedFrom = item['observed_from']?.toString();
+      final observedTo = item['observed_to']?.toString();
+      final observationTime = observedAt != null && observedAt.isNotEmpty
+          ? observedAt
+          : observedFrom != null && observedTo != null
+              ? '$observedFrom to $observedTo'
+              : item['retrieved_at']?.toString() ?? item['time']?.toString() ?? 'Unavailable';
       parsedVariables[key] = VariableItem(
         key: key,
         value: (item['value'] as num?)?.toDouble(),
@@ -97,7 +110,7 @@ class AdvisoryDto {
         threshold: (item['threshold'] as num?)?.toDouble(),
         status: item['status'] as String? ?? 'unavailable',
         source: item['source'] as String? ?? 'Unavailable',
-        time: (item['observed_at'] ?? item['time']) as String? ?? 'Unavailable',
+        time: observationTime,
         direction: item['direction'] as String?,
       );
     });
@@ -114,7 +127,7 @@ class AdvisoryDto {
           hour: item['hour'] as String? ?? '--',
           waveM: wave,
           windKn: wind,
-          state: item['state'] as String? ?? _stateFor(wave, wind),
+          state: item['state'] as String? ?? 'unknown',
         ));
       }
     } else if (hourlyChartJson is Map) {
@@ -122,6 +135,7 @@ class AdvisoryDto {
       final labels = chart['labels'] is List ? chart['labels'] as List : const [];
       final waves = chart['wave_m'] is List ? chart['wave_m'] as List : const [];
       final winds = chart['wind_kn'] is List ? chart['wind_kn'] as List : const [];
+      final states = chart['state'] is List ? chart['state'] as List : const [];
       final count = [labels.length, waves.length, winds.length].reduce((a, b) => a < b ? a : b);
       for (var index = 0; index < count; index++) {
         final wave = waves[index] is num ? (waves[index] as num).toDouble() : null;
@@ -131,7 +145,9 @@ class AdvisoryDto {
           hour: labels[index].toString(),
           waveM: wave,
           windKn: wind,
-          state: _stateFor(wave, wind),
+          state: index < states.length && states[index] is String
+              ? states[index] as String
+              : 'unknown',
         ));
       }
     }
@@ -149,8 +165,7 @@ class AdvisoryDto {
       );
     }
 
-    final timestamp = DateFormatter.parseIso(timestampStr) ??
-        DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    final timestamp = sourceTimestamp;
     return AdvisoryEntity(
       verdict: verdict,
       colorHex: _colorHex(),
@@ -168,11 +183,5 @@ class AdvisoryDto {
       timestamp: timestamp,
       staleness: staleness,
     );
-  }
-
-  static String _stateFor(double wave, double wind) {
-    if (wave >= 4.0 || wind >= 34.0) return 'danger';
-    if (wave >= 2.5 || wind >= 20.0) return 'caution';
-    return 'good';
   }
 }

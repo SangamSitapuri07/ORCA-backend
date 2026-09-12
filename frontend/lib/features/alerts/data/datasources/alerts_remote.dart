@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import '../../../../core/config/api_paths.dart';
 import '../dto/alert_dto.dart';
+import '../dto/alerts_snapshot_dto.dart';
 
 /// Remote datasource for live and explicitly simulated ORCA Box alerts.
 class AlertsRemoteDataSource {
@@ -8,7 +9,7 @@ class AlertsRemoteDataSource {
 
   AlertsRemoteDataSource(this._dio);
 
-  Future<List<AlertDto>> getActiveAlerts({
+  Future<AlertsSnapshotDto> getActiveAlerts({
     required double lat,
     required double lon,
   }) async {
@@ -16,12 +17,11 @@ class AlertsRemoteDataSource {
       ApiPaths.alerts,
       queryParameters: <String, dynamic>{'lat': lat, 'lon': lon},
     );
-    final raw = response.data?['alerts'];
-    if (raw is! List) return <AlertDto>[];
-    return raw
-        .whereType<Map>()
-        .map((item) => AlertDto.fromJson(Map<String, dynamic>.from(item)))
-        .toList();
+    final data = response.data;
+    if (data == null) {
+      throw const FormatException('Alert response was empty');
+    }
+    return AlertsSnapshotDto.fromJson(data);
   }
 
   Future<AlertDto> simulateAlert({

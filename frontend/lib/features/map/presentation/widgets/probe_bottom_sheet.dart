@@ -5,7 +5,6 @@ import '../../../../core/utils/date_formatter.dart';
 import '../../../../core/utils/formatters.dart';
 import '../../../../core/utils/geo_utils.dart';
 import '../../../../core/widgets/source_footer.dart';
-import '../../../../core/widgets/staleness_badge.dart';
 import '../../../../core/widgets/stat_tile.dart';
 import '../../domain/entities/zone_snapshot.dart';
 
@@ -23,6 +22,9 @@ class ProbeBottomSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.78,
+      ),
       padding: const EdgeInsets.all(16),
       decoration: const BoxDecoration(
         color: OrcaTheme.surface,
@@ -35,7 +37,8 @@ class ProbeBottomSheet extends StatelessWidget {
           ),
         ],
       ),
-      child: Column(
+      child: SingleChildScrollView(
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -79,16 +82,11 @@ class ProbeBottomSheet extends StatelessWidget {
                   ),
                 ],
               ),
-              Row(
-                children: [
-                  StalenessBadge(staleness: snapshot.staleness),
-                  IconButton(
-                    icon: const Icon(Icons.close, color: OrcaTheme.textSecondary, size: 20),
-                    onPressed: onClose,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                  ),
-                ],
+              IconButton(
+                icon: const Icon(Icons.close, color: OrcaTheme.textSecondary, size: 20),
+                onPressed: onClose,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
               ),
             ],
           ),
@@ -107,31 +105,25 @@ class ProbeBottomSheet extends StatelessWidget {
                 label: 'Wave Height',
                 value: Formatters.waveHeight(snapshot.waveHeightM),
                 icon: Icons.waves,
-                status: snapshot.waveHeightM == null
-                    ? 'unavailable'
-                    : snapshot.waveHeightM! >= 2.5 ? 'caution' : 'good',
+                status: snapshot.waveHeightM == null ? 'unavailable' : null,
               ),
               StatTile(
                 label: 'Wind Speed',
                 value: Formatters.windKnots(snapshot.windSpeedKn),
                 icon: Icons.air,
-                status: snapshot.windSpeedKn == null
-                    ? 'unavailable'
-                    : snapshot.windSpeedKn! >= 20.0 ? 'caution' : 'good',
+                status: snapshot.windSpeedKn == null ? 'unavailable' : null,
               ),
               StatTile(
-                label: 'Sea Temp',
+                label: 'Sea Temp Avg',
                 value: Formatters.temperature(snapshot.seaTempC),
                 icon: Icons.thermostat,
-                status: snapshot.seaTempC == null ? 'unavailable' : 'good',
+                status: snapshot.seaTempC == null ? 'unavailable' : null,
               ),
               StatTile(
                 label: 'Current',
                 value: Formatters.current(snapshot.currentSpeedKn, snapshot.currentDirection),
                 icon: Icons.navigation,
-                status: snapshot.currentSpeedKn == null
-                    ? 'unavailable'
-                    : snapshot.currentSpeedKn! > 3.0 ? 'caution' : 'good',
+                status: snapshot.currentSpeedKn == null ? 'unavailable' : null,
               ),
               StatTile(
                 label: 'Chlorophyll',
@@ -139,18 +131,125 @@ class ProbeBottomSheet extends StatelessWidget {
                     ? Formatters.chlorophyll(snapshot.chlorophyllMgM3)
                     : 'N/A',
                 icon: Icons.biotech,
-                status: snapshot.chlorophyllMgM3 == null ? 'unavailable' : 'good',
+                status: snapshot.chlorophyllMgM3 == null ? 'unavailable' : null,
               ),
               StatTile(
-                label: 'Fleet Effort',
+                label: 'Fishing Activity',
                 value: snapshot.fishingEffortHours != null
                     ? Formatters.fishingEffort(snapshot.fishingEffortHours)
                     : '--',
                 icon: Icons.sailing,
-                status: snapshot.fishingEffortHours == null ? 'unavailable' : 'good',
+                status: snapshot.fishingEffortHours == null ? 'unavailable' : null,
               ),
             ],
           ),
+
+          if (snapshot.observations.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Theme(
+              data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.info_outline, size: 18, color: VerdictColors.info),
+                title: const Text(
+                  'Observation details',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: OrcaTheme.textPrimary,
+                  ),
+                ),
+                subtitle: const Text(
+                  'Source and observation time',
+                  style: TextStyle(fontSize: 10, color: OrcaTheme.textMuted),
+                ),
+                children: snapshot.observations.entries.map((entry) {
+                  final metadata = entry.value;
+                  final details = <String>[
+                    metadata.source,
+                    metadata.timeLabel,
+                    if (metadata.statistic != null) metadata.statistic!,
+                    if (metadata.note != null) metadata.note!,
+                  ];
+                  return Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 6),
+                    padding: const EdgeInsets.all(9),
+                    decoration: BoxDecoration(
+                      color: OrcaTheme.surfaceElevated,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _observationLabel(entry.key),
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: OrcaTheme.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          details.join('\n'),
+                          style: const TextStyle(
+                            fontSize: 10,
+                            height: 1.35,
+                            color: OrcaTheme.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
+
+          if (snapshot.sourcesFailed.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Theme(
+              data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: const EdgeInsets.only(bottom: 8),
+                leading: const Icon(
+                  Icons.warning_amber_rounded,
+                  size: 18,
+                  color: VerdictColors.caution,
+                ),
+                title: Text(
+                  '${snapshot.sourcesFailed.length} unavailable check(s)',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: OrcaTheme.textPrimary,
+                  ),
+                ),
+                subtitle: const Text(
+                  'Tap for exact provider errors',
+                  style: TextStyle(fontSize: 10, color: OrcaTheme.textMuted),
+                ),
+                children: snapshot.sourcesFailed.map((failure) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 5),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '• $failure',
+                        style: const TextStyle(
+                          fontSize: 10,
+                          color: OrcaTheme.textSecondary,
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
 
           if (snapshot.nearestHarbour != null) ...[
             const SizedBox(height: 10),
@@ -182,10 +281,30 @@ class ProbeBottomSheet extends StatelessWidget {
           const SizedBox(height: 10),
           SourceFooter(
             sources: snapshot.sources,
-            timeLabel: DateFormatter.formatIstTime(snapshot.timestamp),
+            timeLabel: 'Retrieved ${DateFormatter.formatIstDateTime(snapshot.timestamp)}',
           ),
         ],
+        ),
       ),
     );
+  }
+
+  String _observationLabel(String key) {
+    switch (key) {
+      case 'wave_height_m':
+        return 'Wave height';
+      case 'wind_speed_kn':
+        return 'Wind speed';
+      case 'sea_temp_c':
+        return 'Sea temperature';
+      case 'current_speed_kn':
+        return 'Surface current';
+      case 'chlorophyll_mg_m3':
+        return 'Chlorophyll';
+      case 'fishing_effort_hours':
+        return 'Reported fishing activity';
+      default:
+        return key.replaceAll('_', ' ');
+    }
   }
 }

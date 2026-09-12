@@ -165,6 +165,18 @@ def test_safe_window_missing_measurements_is_not_declared_safe():
     assert fc.find_safe_window(incomplete, horizon_hours=8)["found"] is False
 
 
+def test_safe_window_rejects_configured_28_knot_gust_boundary():
+    forecast = {
+        "hourly": {
+            "time": [f"2030-01-01T{h:02d}:00" for h in range(8)],
+            "wave_height_m": [1.0] * 8,
+            "wind_kn": [10.0] * 8,
+            "gust_kn": [28.0] * 8,
+        }
+    }
+    assert fc.find_safe_window(forecast, horizon_hours=8)["found"] is False
+
+
 def test_safe_window_stormy_forecast():
     stormy = {
         "hourly": {
@@ -210,6 +222,41 @@ def test_advisory_go_verdict(monkeypatch):
     assert adv["icon"] == "✅"
     assert any(r["code"] == "official_pfz" for r in adv["reasons"])
     assert adv["sources"], "advisory must cite its sources"
+
+
+def test_advisory_variable_details_preserve_observation_window(monkeypatch):
+    _patch_calm(monkeypatch)
+    snapshot = {
+        **FAKE_SNAPSHOT,
+        "chlorophyll_source": "NOAA ERDDAP VIIRS DINEOF",
+        "chlorophyll_date": "2026-09-01",
+        "observation_metadata": {
+            "sea_temp_c": {
+                "source": "Open-Meteo Marine API",
+                "observed_from": "2026-08-01",
+                "observed_to": "2026-08-31",
+                "statistic": "Monthly-window mean",
+            },
+            "chlorophyll_mg_m3": {
+                "source": "NOAA ERDDAP VIIRS DINEOF",
+                "observed_at": "2026-09-01",
+            },
+        },
+    }
+    monkeypatch.setattr(
+        "pipeline.advisory.zone_snapshot_cached",
+        lambda *a, **k: snapshot,
+    )
+
+    adv = build_advisory(20.9, 70.37)
+    sst = adv["variable_details"]["sea_surface_temp"]
+    chlorophyll = adv["variable_details"]["chlorophyll"]
+    assert sst["source"] == "Open-Meteo Marine API"
+    assert sst["observed_at"] is None
+    assert sst["observed_from"] == "2026-08-01"
+    assert sst["observed_to"] == "2026-08-31"
+    assert chlorophyll["source"] == "NOAA ERDDAP VIIRS DINEOF"
+    assert chlorophyll["observed_at"] == "2026-09-01"
 
 
 def test_advisory_never_returns_go_when_live_safety_data_is_missing(monkeypatch):
@@ -272,6 +319,24 @@ def test_alerts_provider_failure_is_not_reported_as_all_clear(monkeypatch):
     assert status["sources_used"] == []
     assert any("Open-Meteo" in error for error in status["sources_failed"])
     assert any("JTWC" in error for error in status["sources_failed"])
+
+
+def test_alerts_missing_required_field_is_incomplete(monkeypatch):
+    alerts_mod._store.clear()
+    partial = dict(FAKE_FORECAST)
+    partial["next24h"] = {
+        **FAKE_FORECAST["next24h"],
+        "gust_max_kn": None,
+    }
+    monkeypatch.setattr(fc, "get_point_forecast", lambda *a, **k: partial)
+    monkeypatch.setattr(jtwc, "nearest_cyclone", lambda lat, lon, **k: {
+        "checked": True, "found": False, "errors": [], "source": "JTWC"})
+
+    status = alerts_mod.evaluate_status(20.9, 70.37)
+
+    assert status["alerts"] == []
+    assert FAKE_FORECAST["source"] in status["sources_used"]
+    assert any("gust_max_kn" in error for error in status["sources_failed"])
 
 
 def test_alerts_gale_warning(monkeypatch):
@@ -493,7 +558,7 @@ def test_hotspot_coastal_bloom_gets_turbidity_caveat():
     assert coastal["bloom"] is True
     assert coastal["coast_km"] is not None and coastal["coast_km"] <= fx.COASTAL_CAVEAT_KM
     assert coastal["caveat"] and "sediment" in coastal["caveat"]
-    assert offshore["caveat"] is None  # honest bloom, no scare-label
+    assert offshore["caveat"] is None  # high display band; no unsupported cause label
 
 
 # ── Rich chart series (48 h evidence arrays) ─────────────────────────
@@ -503,12 +568,25 @@ def test_chart_series_exposes_all_variables():
     fcst = dict(FAKE_FORECAST)
     fcst["hourly"] = {**FAKE_FORECAST["hourly"], "sst_c": [28.4, 28.5]}
     out = fc.chart_series(fcst, hours=2, step=1)
-    for key in ("wave_m", "swell_m", "wind_kn", "gust_kn", "current_kn", "sst_c", "rain_mm"):
+    for key in ("wave_m", "swell_m", "wind_kn", "gust_kn", "current_kn", "sst_c", "rain_mm", "state"):
         assert key in out, f"chart series missing {key}"
         assert len(out[key]) == len(out["labels"]) >= 1
     # _now_index lands on the LAST past hour for these 2026-09-03 times
     assert out["current_kn"][0] == 0.58
     assert out["sst_c"][0] == 28.5
+
+
+def test_chart_series_states_are_backend_owned_and_fail_safe():
+    fcst = {
+        "hourly": {
+            "time": ["2030-01-01T00:00", "2030-01-01T01:00", "2030-01-01T02:00"],
+            "wave_height_m": [1.0, 1.0, 1.0],
+            "wind_kn": [10.0, 10.0, None],
+            "gust_kn": [27.9, 28.0, 10.0],
+        }
+    }
+    out = fc.chart_series(fcst, hours=3, step=1)
+    assert out["state"] == ["good", "caution", "unknown"]
 
 
 def test_chart_series_tolerates_old_cached_entries():

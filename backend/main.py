@@ -315,12 +315,12 @@ def health() -> dict[str, Any]:
     mosdac_set = bool(os.environ.get("MOSDAC_USERNAME") and os.environ.get("MOSDAC_PASSWORD"))
     cache = cache_stats()
     source_health = {
-        "open_meteo_marine": {"name": "Open-Meteo Marine", "agency": "Open-Meteo", "status": "not_probed", "latency_ms": None, "note": "Live fetch-on-demand; not probed by health."},
-        "open_meteo_forecast": {"name": "Open-Meteo Forecast", "agency": "Open-Meteo", "status": "not_probed", "latency_ms": None, "note": "Live fetch-on-demand; not probed by health."},
-        "open_meteo_daily": {"name": "Open-Meteo Daily", "agency": "Open-Meteo", "status": "not_probed", "latency_ms": None, "note": "Live fetch-on-demand; not probed by health."},
+        "open_meteo_marine": {"name": "Open-Meteo Marine", "agency": "Open-Meteo", "status": "not_probed", "latency_ms": None, "note": "Remote fetch-on-demand; not probed by health."},
+        "open_meteo_forecast": {"name": "Open-Meteo Forecast", "agency": "Open-Meteo", "status": "not_probed", "latency_ms": None, "note": "Remote fetch-on-demand; not probed by health."},
+        "open_meteo_daily": {"name": "Open-Meteo Daily", "agency": "Open-Meteo", "status": "not_probed", "latency_ms": None, "note": "Remote fetch-on-demand; not probed by health."},
         "open_meteo_archive": {"name": "Open-Meteo Archive", "agency": "Open-Meteo", "status": "not_probed", "latency_ms": None, "note": "Three-prior-year comparison sample fetched on demand; not climatology and not probed by health."},
-        "noaa_coastwatch": {"name": "NOAA CoastWatch ERDDAP", "agency": "NOAA NESDIS", "status": "not_probed", "latency_ms": None, "note": "Live fetch-on-demand with explicit failure reporting; not probed by health."},
-        "esa_oc_cci": {"name": "ESA OC-CCI", "agency": "European Space Agency", "status": "not_probed", "latency_ms": None, "note": "Optional cloud-masked cross-check; not probed by health."},
+        "noaa_coastwatch": {"name": "NOAA CoastWatch ERDDAP", "agency": "NOAA NESDIS", "status": "not_probed", "latency_ms": None, "note": "Remote fetch-on-demand with explicit failure reporting; not probed by health."},
+        "esa_oc_cci": {"name": "ESA OC-CCI", "agency": "European Space Agency", "status": "not_probed", "latency_ms": None, "note": "Optional chlorophyll source comparison; not probed by health."},
         "isro_mosdac": {"name": "ISRO MOSDAC OCM-3", "agency": "ISRO/SAC", "status": "configured_not_probed" if mosdac_set else "disabled", "latency_ms": None, "note": "Credentials configured." if mosdac_set else "Set MOSDAC_USERNAME and MOSDAC_PASSWORD."},
         "incois_erddap": {"name": "INCOIS ERDDAP", "agency": "MoES/INCOIS", "status": "not_integrated", "latency_ms": None, "note": "Catalogued endpoint, but the current adapter found no chlorophyll dataset and does not query it."},
         "incois_las": {"name": "INCOIS LAS", "agency": "MoES/INCOIS", "status": "not_probed", "latency_ms": None, "note": "Best-effort backup; not probed by health. The 2026-09-12 audit returned a NetCDF I/O failure in this runtime."},
@@ -345,13 +345,13 @@ def health() -> dict[str, Any]:
         },
         # Legacy summary retained for the existing web source chips.
         "data_sources": {
-            "openmeteo": "wired (live fetch-on-demand; not probed)",
-            "noaa_erddap": "wired (live fetch-on-demand; not probed)",
+            "openmeteo": "wired (remote fetch-on-demand; not probed)",
+            "noaa_erddap": "wired (remote fetch-on-demand; not probed)",
             "esa_occci": "wired optional cross-check (not probed)",
             "gfw": "configured" if gfw_token_set else "disabled — needs GFW_API_TOKEN",
-            "incois_las": "wired backup (live fetch-on-demand; not probed)",
-            "incois_pfz_wfs": "wired (official WFS; not probed)",
-            "jtwc": "wired supplemental guidance (live fetch-on-demand; not probed)",
+            "incois_las": "wired backup (remote fetch-on-demand; not probed)",
+            "incois_pfz_wfs": "wired (official WFS; remote fetch-on-demand; not probed)",
+            "jtwc": "wired supplemental guidance (remote fetch-on-demand; not probed)",
             "mosdac": "configured" if mosdac_set else "disabled — needs MOSDAC credentials",
         },
         "source_health": source_health,
@@ -388,13 +388,13 @@ def agents_registry() -> dict[str, Any]:
         {"id": "marine_ecology", "name": "Marine Ecology 🐟", "class": "LLM + DETERMINISTIC", "role": "Provisional co-observation context; no ecological or catch verdict", "sources": ["ZoneSnapshot observations"]},
         {"id": "fisheries_pfz", "name": "Fisheries Context 🎣", "class": "LLM + DETERMINISTIC", "role": "Reports environmental and GFW context without inventing a PFZ verdict", "sources": ["GFW AIS", "ZoneSnapshot observations"]},
         {"id": "anomaly_detection", "name": "Anomaly Detection 🔍", "class": "DETERMINISTIC", "role": "Deviation against fetched historical baselines", "sources": ["Open-Meteo Archive"]},
-        {"id": "marine_risk", "name": "Marine Risk 🚨", "class": "DETERMINISTIC", "role": "Authoritative worst-case risk fold", "sources": ["Structured agent findings"]},
+        {"id": "marine_risk", "name": "Marine Risk 🚨", "class": "DETERMINISTIC", "role": "Wave/weather hazard fold; /api/v1/advisory owns the skipper verdict", "sources": ["Structured agent findings"]},
         {"id": "orchestrator", "name": "ORCA Orchestrator 🧠", "class": "LLM + DETERMINISTIC", "role": "Deterministic synthesis with optional bounded Ollama explanation", "sources": ["All agent findings"]},
     ]
     return {
         "agents": [{**agent, "implemented": True, "rag_invoked": False} for agent in agents],
         "count": len(agents),
-        "safety_authority": "deterministic marine_risk and advisory engines",
+        "safety_authority": "/api/v1/advisory deterministic engine",
         "rag_status": "unavailable — authoritative implementation not supplied",
     }
 
@@ -594,7 +594,7 @@ def get_reason(
 
     def _run() -> dict[str, Any]:
         # Cached snapshot: /reason, /advisory and chat for the same point
-        # share one live fetch instead of each paying the full cost.
+        # share one remote fetch instead of each paying the full cost.
         snap = zone_snapshot_cached(lat, lon, date, include_gfw=gfw)
         insight = reason(snap, include_agents=agent_list)
         insight["snapshot"] = snap
@@ -1096,8 +1096,11 @@ async def simulate_alert(payload: dict[str, Any]) -> dict[str, Any]:
 
 @app.post("/api/v1/chat")
 async def chat_once(payload: dict[str, Any]) -> dict[str, Any]:
-    """Rule-based assistant (no LLM yet). Same events as the WebSocket,
-    delivered as one JSON document — this is the HTTP fallback path."""
+    """Deterministic agent-backed assistant with optional Ollama enrichment.
+
+    Uses the same events as the WebSocket and retains source failures in the
+    one-document HTTP fallback response.
+    """
     message = str(payload.get("message", "")).strip()
     if not message:
         raise HTTPException(status_code=400, detail="message is required")

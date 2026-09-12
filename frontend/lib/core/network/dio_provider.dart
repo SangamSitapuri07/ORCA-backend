@@ -11,7 +11,7 @@ final baseUrlProvider = StateProvider<String>((ref) {
       AppConfig.defaultBaseUrl;
 });
 
-/// Shared Dio client provider configured with 15s timeout & retry-once interceptor.
+/// Shared Dio client with configured stage-specific timeouts and one retry.
 final dioProvider = Provider<Dio>((ref) {
   final baseUrl = ref.watch(baseUrlProvider);
   final dio = Dio(

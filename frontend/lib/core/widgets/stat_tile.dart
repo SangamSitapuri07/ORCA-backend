@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../theme/orca_theme.dart';
 import '../theme/verdict_colors.dart';
 
-/// Clean, high-contrast metric tile with unit, source provenance, and threshold coloring.
+/// Metric tile. Safety coloring is applied only when its caller supplies a backend status.
 class StatTile extends StatelessWidget {
   final String label;
   final String value;

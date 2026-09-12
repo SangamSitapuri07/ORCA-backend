@@ -35,14 +35,11 @@
   "probeCoordinates": "स्थान",
   "probeChlorophyll": "क्लोरोफिल (मछली क्षेत्र)",
   "probeFishingEffort": "मछली पकड़ने की गतिविधि",
-  "aiAgentsTitle": "10-एजेंट सहयोगी प्रणाली",
-  "aiRunAnalysis": "10-एजेंट विश्लेषण चलाएं",
+  "aiAgentsTitle": "11-चरण सहयोगी प्रणाली",
+  "aiRunAnalysis": "11-चरण विश्लेषण चलाएं",
   "aiRunning": "एजेंट्स मिलकर विश्लेषण कर रहे हैं...",
-  "aiCollaborationTrace": "एजेंट सहयोग लाइव ट्रेस",
+  "aiCollaborationTrace": "बैकएंड एजेंट ट्रेस",
   "aiOrchestrationSynthesis": "अंतिम निर्णय एवं निष्कर्ष",
-  "aiChatTitle": "समुद्री सलाहकार सहायक",
-  "aiChatUnavailable": "एज सर्वर संसाधनों की बचत हेतु चैट सुविधा अभी बंद है।",
-  "aiChatInputHint": "समुद्री मौसम के बारे में पूछें...",
   "alertsTitle": "सक्रिय समुद्री चेतावनी",
   "noActiveAlerts": "कोई सक्रिय तूफान या मौसम चेतावनी नहीं है",
   "simulateAlert": "चेतावनी सिमुलेशन (डेमो)",
@@ -69,5 +66,5 @@
   "save": "सहेजें",
   "cancel": "रद्द करें",
   "retry": "पुनः प्रयास करें",
-  "offlineBanner": "आप ऑफ़लाइन हैं। पिछली सत्यापित सलाह दिखाई जा रही है।"
+  "offlineBanner": "आप ऑफ़लाइन हैं। उपलब्ध होने पर कैश की गई सलाह उसके मूल समय के साथ दिखाई जा रही है।"
 }
