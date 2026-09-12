@@ -347,6 +347,236 @@ def extract_wind(pf, lat: float, lon: float) -> dict[str, Any] | None:
 
 
 # ----------------------------------------------------------------------
+# Wind — L2B swath products (E06SCT_L2B_WV12 / WV25)
+# ----------------------------------------------------------------------
+
+# Candidate variable names, checked case-insensitively against the LAST
+# path segment (swath arrays can live inside HDF5 subgroups). Names are
+# learned from MOSDAC/SCATSAT heritage products; the deep dump
+# (pipeline/deepdump.py) prints the real inventory so this list can be
+# corrected against evidence instead of guesses.
+_SWATH_LAT_NAMES = ("lat", "latitude")
+_SWATH_LON_NAMES = ("lon", "longitude")
+_U_NAMES = ("u10", "u_wind", "uwind", "zonal_wind", "u")
+_V_NAMES = ("v10", "v_wind", "vwind", "meridional_wind", "v")
+_SPEED_NAMES = ("wind_speed", "windspeed", "wspd", "speed")
+_DIR_NAMES = ("wind_dir", "winddir", "wdir", "direction")
+_FLAG_NAMES = ("quality_flag", "quality", "qc", "flag", "wvc_quality")
+
+
+def _decode_swath_array(arr: np.ndarray, attrs: dict) -> np.ndarray:
+    """Apply HDF/NetCDF packing (scale_factor/add_offset) + fill mask.
+
+    Swath geolocation is commonly stored as packed int16 — reading it raw
+    is exactly how 'no usable latitude/longitude' verdicts happen.
+    """
+    out = np.asarray(arr, dtype=np.float64)
+    scale = add = None
+    for k, v in (attrs or {}).items():
+        kl = str(k).lower()
+        try:
+            if kl == "scale_factor" and scale is None:
+                scale = float(np.asarray(v).ravel()[0])
+            elif kl == "add_offset" and add is None:
+                add = float(np.asarray(v).ravel()[0])
+        except Exception:  # noqa: BLE001
+            pass
+    if scale is not None or add is not None:
+        out = out * (scale if scale is not None else 1.0) + (add if add is not None else 0.0)
+    fills = set()
+    for k, v in (attrs or {}).items():
+        kl = str(k).lower()
+        if kl in ("_fillvalue", "fill_value", "missing_value"):
+            try:
+                fills.add(float(np.asarray(v).ravel()[0]))
+                # packed fill decodes too — record the RAW fill as well
+                if scale is not None or add is not None:
+                    raw = float(np.asarray(v).ravel()[0])
+                    fills.add(raw * (scale if scale is not None else 1.0)
+                              + (add if add is not None else 0.0))
+            except Exception:  # noqa: BLE001
+                pass
+    for fv in fills:
+        out[np.isclose(out, fv, rtol=1e-6, atol=1e-6)] = np.nan
+    out[~np.isfinite(out)] = np.nan
+    return out
+
+
+def _find_swath_var(pf, names: tuple[str, ...], want_2d: bool = True):
+    """Locate a swath variable by candidate base names.
+
+    Returns (path, opener) where opener() -> (np.ndarray values, attrs dict).
+    Prefers paths the parser already flagged (pf.swath_lat / swath_lon).
+    """
+    import h5py
+
+    def _open(path):
+        if pf.file_type == "HDF5" or str(pf.path).lower().endswith((".h5", ".hdf5", ".he5")):
+            with h5py.File(pf.path, "r") as f:
+                obj = f[path]
+                return np.array(obj[()]), {k: obj.attrs[k] for k in obj.attrs}
+        with _open_dataset(pf.path, pf.file_type) as ds:
+            return ds[path].values, {k: ds[path].attrs[k] for k in ds[path].attrs}
+
+    lowered = {v.lower(): v for v in pf.variables}
+    for cand in names:
+        if cand in lowered:
+            path = lowered[cand]
+            info = pf.variables[path]
+            shape = info.get("shape") or info.get("dims") or []
+            if want_2d and len(shape) != 2:
+                continue
+            return path, _open
+    # fall back to base-name matching on the last path segment
+    for path, info in pf.variables.items():
+        base = path.split("/")[-1].lower()
+        if base in names:
+            shape = info.get("shape") or []
+            if want_2d and len(shape) != 2:
+                continue
+            return path, _open
+    return None, _open
+
+
+def extract_wind_swath(pf, lat: float, lon: float,
+                       max_dist_deg: float = 1.0) -> dict[str, Any] | None:
+    """Wind at (lat, lon) from an L2B SWATH granule (per-pixel geolocation).
+
+    Why this exists (2026-09-13): E06SCT_L2B_WV12 HDF5 files carry wind
+    vectors on the satellite swath — latitude/longitude are 2D per-pixel
+    arrays (often packed int16 with scale_factor), NOT 1D grid
+    coordinates. extract_wind() only understands regular grids and
+    returns None for these files, which got mis-reported as the product
+    "lacking usable latitude/longitude". The arrays are there; this
+    extractor reads them.
+
+    Returns the same shape as extract_wind() plus `flag` (raw quality
+    value at the pixel — semantics confirmed from the real file before
+    any agent wiring; we never mask on a guessed flag meaning).
+    """
+    try:
+        lat_path, opener = _find_swath_var(pf, _SWATH_LAT_NAMES)
+        lon_path = None
+        if lat_path:
+            lon_path, _ = _find_swath_var(pf, _SWATH_LON_NAMES)
+        if not lat_path or not lon_path:
+            return None
+
+        lat_arr, lat_attrs = opener(lat_path)
+        lon_arr, lon_attrs = opener(lon_path)
+        lat_d = _decode_swath_array(lat_arr, lat_attrs)
+        lon_d = _decode_swath_array(lon_arr, lon_attrs)
+        if lat_d.shape != lon_d.shape or lat_d.ndim != 2:
+            return None
+
+        # 0-360 vs -180..180 convention: match the file, not the caller
+        lon_shift = float(np.nanmean(lon_d)) > 180.0
+        target_lon = _normalize_lon(lon) if lon_shift else lon
+
+        # Nearest pixel: coarse subsample first, then refine locally —
+        # a 12 km swath grid has millions of pixels, argmin over the
+        # full array is needlessly slow.
+        n = lat_d.size
+        step = max(1, int(n ** 0.5 / 220))
+        sub_lat = lat_d[::step, ::step]
+        sub_lon = lon_d[::step, ::step]
+        ok = np.isfinite(sub_lat) & np.isfinite(sub_lon)
+        if not ok.any():
+            return None
+        d2 = (sub_lat - lat) ** 2
+        dlon = np.abs(sub_lon - target_lon)
+        dlon = np.minimum(dlon, 360.0 - dlon)   # handle the 0/360 seam
+        d2 = d2 + dlon ** 2
+        d2[~ok] = np.inf
+        r0, c0 = np.unravel_index(int(np.argmin(d2)), d2.shape)
+        # refine in a window around the coarse hit
+        rr = slice(max(0, r0 * step - step), min(lat_d.shape[0], r0 * step + 2 * step))
+        cc = slice(max(0, c0 * step - step), min(lat_d.shape[1], c0 * step + 2 * step))
+        win_lat = lat_d[rr, cc]
+        win_lon = lon_d[rr, cc]
+        ok = np.isfinite(win_lat) & np.isfinite(win_lon)
+        if not ok.any():
+            return None
+        d2 = (win_lat - lat) ** 2 + np.minimum(np.abs(win_lon - target_lon),
+                                               360.0 - np.abs(win_lon - target_lon)) ** 2
+        d2[~ok] = np.inf
+        wi, wj = np.unravel_index(int(np.argmin(d2)), d2.shape)
+        pix_r = rr.start + int(wi)
+        pix_c = cc.start + int(wj)
+        found_lat = float(lat_d[pix_r, pix_c])
+        found_lon = float(lon_d[pix_r, pix_c])
+        disp_lon = found_lon - 360.0 if (lon_shift and found_lon > 180) else found_lon
+
+        dlon_disp = abs(disp_lon - lon)
+        dlon_disp = min(dlon_disp, 360.0 - dlon_disp)
+        dist = math.hypot(found_lat - lat, dlon_disp)
+        if dist > max_dist_deg:
+            return None
+
+        def _val(path):
+            if path is None:
+                return None
+            try:
+                arr, attrs = opener(path)
+                dec = _decode_swath_array(arr, attrs)
+                if dec.ndim != 2:
+                    return None
+                v = float(dec[pix_r, pix_c])
+                return v if math.isfinite(v) else None
+            except Exception:  # noqa: BLE001
+                return None
+
+        u_path, _ = _find_swath_var(pf, _U_NAMES, want_2d=False)
+        v_path, _ = _find_swath_var(pf, _V_NAMES, want_2d=False)
+        spd_path, _ = _find_swath_var(pf, _SPEED_NAMES, want_2d=False)
+        dir_path, _ = _find_swath_var(pf, _DIR_NAMES, want_2d=False)
+
+        u = v = None
+        if u_path and v_path:
+            u, v = _val(u_path), _val(v_path)
+        if (u is None or v is None) and spd_path and dir_path:
+            spd = _val(spd_path)
+            drc = _val(dir_path)
+            if spd is not None and drc is not None:
+                # meteorological FROM convention (0=N, 90=E) — the
+                # standard for scatterometer wind direction
+                rad = math.radians(drc)
+                u = -spd * math.sin(rad)
+                v = -spd * math.cos(rad)
+        if u is None or v is None:
+            return None
+
+        speed = math.hypot(u, v)
+        met_from = (math.degrees(math.atan2(v, u)) + 180.0) % 360.0
+        result = {
+            "u": u,
+            "v": v,
+            "speed": speed,
+            "direction_deg": met_from,
+            "lat": found_lat,
+            "lon": disp_lon,
+            "distance_deg": float(dist),
+            "pixel": (pix_r, pix_c),
+            "source": pf.path.name,
+        }
+        if spd_path:
+            s = _val(spd_path)
+            if s is not None:
+                result["speed_reported"] = s
+        flag_path, _ = _find_swath_var(pf, _FLAG_NAMES, want_2d=False)
+        if flag_path:
+            try:
+                arr, attrs = opener(flag_path)
+                result["flag"] = int(arr[pix_r, pix_c])
+                result["flag_var"] = flag_path
+            except Exception:  # noqa: BLE001
+                pass
+        return result
+    except Exception as exc:  # noqa: BLE001
+        return {"error": str(exc), "source": pf.path.name}
+
+
+# ----------------------------------------------------------------------
 # Upwelling
 # ----------------------------------------------------------------------
 

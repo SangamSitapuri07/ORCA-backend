@@ -10,6 +10,7 @@ __pycache__/
 data/raw/
 data/cache/
 data/mosdac_granules/
+data/mosdac_probe/
 *.nc
 *.h5
 *.hdf5

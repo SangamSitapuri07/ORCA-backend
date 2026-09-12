@@ -44,10 +44,14 @@ from typing import Any
 # Known product short codes we've seen in MOSDAC filenames.
 # If we find a new one, add it here and the parser will pick it up.
 _KNOWN_PRODUCTS = {
-    "UI", "AW", "AWV", "AWV12KM", "AWV6HOURLY", "AC", "OC", "GA", "PR",
+    "UI", "AW", "AH", "AWV", "AWV12KM", "AWV6HOURLY", "AC", "OC", "GA", "PR",
     "PS", "SR", "AD", "EV", "CQ", "FL", "PC", "BT", "GAM", "SIG", "GS",
     "WV", "HWV", "DAILYAWV", "AWV50",
 }
+# "AH" added 2026-09-13: E06SCT_L4_AWV6HOURLY granules are named
+# E06SCTL4AH_2026255_0000_25km_v1.0.0.nc (verified live via apios search,
+# gId=18401334 — "Analyzed Winds are computed using Particle Filter
+# Technique"). The "_0000_" token is the 6-hourly cycle time (HHMM UTC).
 
 # Satellite prefixes we know about
 _KNOWN_SATELLITES = {"E04", "E06", "O2", "O3", "INS3DR", "INS3DS", "JPSS1", "JPSS2"}
@@ -99,25 +103,46 @@ def _parse_mosdac_block(name: str) -> dict | None:
         result["instrument"] = inst
         rest = rest[len(inst):]
 
-    # 3. Find processing level — must be L followed by 1-2 chars (digit
-    #    optionally followed by a letter like 1B, 2A, 2B, 3M)
-    m = re.match(r"^L(\dm?)", rest)
-    if not m:
-        return None
-    result["processing_level"] = "L" + m.group(1)
-    rest = rest[m.end():]
+    # 3+4. Find processing level + product together. They are ambiguous:
+    #      'E06SCTL4AH'    = L4 + product 'AH'
+    #      'E06SCTL2B2026255…' = level L2B followed by the Julian date
+    #      (verified live 2026-09-13: E06SCT_L2B_WV12 granules are named
+    #      E06SCTL2B2026255_20046_20047_NS_12km_2026-255T10-54-49_v1.0.5.h5)
+    #      So: try the SHORT level (L4) and the LONG level (L2B/L1B) and
+    #      accept whichever split yields a KNOWN product code or a date.
+    def _level_candidates(r):
+        for pat in (r"^L(\d)", r"^L(\d[AB])"):
+            m = re.match(pat, r)
+            if m:
+                yield "L" + m.group(1), r[m.end():]
 
-    # 4. Find product — try known codes longest-first
-    for p in sorted(_KNOWN_PRODUCTS, key=len, reverse=True):
-        if rest.startswith(p):
-            result["product_name"] = p
+    for cand_level, cand_rest in _level_candidates(rest):
+        # (a) known product code directly after the level
+        for p in sorted(_KNOWN_PRODUCTS, key=len, reverse=True):
+            if cand_rest.startswith(p):
+                result["processing_level"] = cand_level
+                result["product_name"] = p
+                return result
+        # (b) level directly followed by a 7-digit Julian date = an L2B
+        #     wind-vector swath granule (datasetId E06SCT_L2B_WV12/_WV25)
+        if re.match(r"^\d{7}([._]|$)", cand_rest):
+            result["processing_level"] = cand_level
+            result["product_name"] = "WV"  # virtual: not in the filename itself
+            result["doy"] = cand_rest[:7]   # YYYYDDD embedded in the head block
             return result
 
+
     # 5. Fallback: take whatever is left up to the first non-letter
-    m = re.match(r"^([A-Z]+)", rest)
+    #    (only with the short level, so we never steal the 'B' of L2B
+    #    to fabricate a one-letter product)
+    m = re.match(r"^L(\d)", rest)
     if m:
-        result["product_name"] = m.group(1)
-        return result
+        result["processing_level"] = "L" + m.group(1)
+        after = rest[m.end():]
+        fm = re.match(r"^([A-Z]+)", after)
+        if fm:
+            result["product_name"] = fm.group(1)
+            return result
 
     return None
 
@@ -161,6 +186,15 @@ class ParsedFile:
 
     coordinates: dict[str, Any] = field(default_factory=dict)
     # 'lat': ndarray, 'lon': ndarray, 'time': list[str], etc.
+
+    # Swath (Level-2) products: latitude/longitude are 2D per-pixel
+    # arrays, NOT 1D grid coordinates. xarray shows nothing in .coords,
+    # which is why L2B wind-vector files used to look like they "lack"
+    # geolocation. These point at where the 2D arrays actually live
+    # (possibly inside an HDF5 subgroup).
+    swath: bool = False
+    swath_lat: str | None = None   # variable path of the 2D latitude array
+    swath_lon: str | None = None   # variable path of the 2D longitude array
 
     file_attrs: dict[str, Any] = field(default_factory=dict)
     # File-level attributes (institution, source, history, etc.)
@@ -218,14 +252,33 @@ def parse_filename(name: str) -> dict:
         head_end += len(block["instrument"])
     if block and block.get("processing_level"):
         head_end += len(block["processing_level"])
-    if block and block.get("product_name"):
+    if block and block.get("doy"):
+        # L2B swath head carries its own date: E06SCTL2B2026255_…
+        # (product 'WV' is virtual — not literally in the filename — so
+        # we must NOT add its length; the date itself fills those chars)
+        head_end += len(block["doy"])
+        result["date"] = _parse_date_str(block["doy"])
+    elif block and block.get("product_name"):
         head_end += len(block["product_name"])
     tail = upper[head_end:]
 
-    # Date is the first run of 6-7 digits in the tail
-    m = re.search(r"(\d{6,7})", tail)
-    if m:
-        result["date"] = _parse_date_str(m.group(1))
+    # Date is the first run of 8 digits (YYYYMMDD — e.g. the coastal
+    # water quality files E06OCML3CQ_20260912_01km_LAC_v1.0.0.nc), else
+    # 7 digits (YYYYDDD Julian — the classic scatterometer convention).
+    # 8 tried FIRST: a plain \d{6,7} on '20260912' used to capture
+    # '2026091' and silently misread it as Julian day 91.
+    if result["date"] is None:
+        m = re.search(r"(\d{8})", tail) or re.search(r"(\d{7})", tail)
+        if m:
+            result["date"] = _parse_date_str(m.group(1))
+            # 6-hourly analyzed winds carry the cycle time after the
+            # date: E06SCTL4AH_2026255_0000_25km_… (_HHMM_ UTC). Fold it
+            # into the datetime so two cycles of the same day differ.
+            hm = re.match(r"[_\-]?(\d{2})(\d{2})(?=[._\-]|$)", tail[m.end():])
+            if hm:
+                hh, mm = int(hm.group(1)), int(hm.group(2))
+                if hh < 24 and mm < 60 and result["date"]:
+                    result["date"] = result["date"].replace(hour=hh, minute=mm)
 
     # Resolution: e.g. "25km", "4k", "12.5km"
     # Match "Nkm" or "Nk" only when followed by separator (_ or . or end)
@@ -416,6 +469,71 @@ def parse(path: str | Path) -> ParsedFile:
         )
     except Exception as exc:  # noqa: BLE001
         pf.warnings.append(f"Could not fully parse file: {exc!s}")
+
+    # Step 2b: HDF5 group-aware inventory (runs even when the xray step
+    # above failed). xarray only exposes the ROOT group and only CF-style
+    # variables — MOSDAC L2 swath HDF5 keeps wind vectors, flags and
+    # geolocation wherever the PGE put them, so walk the real tree with
+    # h5py and merge anything xarray missed.
+    if pf.file_type in ("HDF5", "NetCDF4"):
+        try:
+            import h5py
+
+            def _attr_str(v) -> str:
+                """HDF5 attr → readable string (bytes, arrays, scalars)."""
+                try:
+                    import numpy as _np
+                    if isinstance(v, bytes):
+                        return v.decode("utf-8", "replace")
+                    if isinstance(v, _np.ndarray):
+                        return str(v.tolist())[:120]
+                    return str(v)
+                except Exception:  # noqa: BLE001
+                    return repr(v)[:120]
+
+            def _walk(group, prefix):
+                for key in group:
+                    obj = group[key]
+                    if isinstance(obj, h5py.Group):
+                        _walk(obj, prefix + key + "/")
+                        continue
+                    fq = prefix + key
+                    attrs = {a: _attr_str(obj.attrs[a]) for a in obj.attrs}
+                    base = fq.split("/")[-1].lower()
+                    # 2D per-pixel geolocation → mark the file as a swath
+                    if obj.ndim == 2:
+                        if base in ("lat", "latitude") and pf.swath_lat is None:
+                            pf.swath_lat = fq
+                        if base in ("lon", "longitude") and pf.swath_lon is None:
+                            pf.swath_lon = fq
+                    if fq in pf.variables:
+                        # seen via xarray — enrich with the FULL attr set
+                        pf.variables[fq].setdefault("attrs", attrs)
+                        for src, dst in (("units", "units"),
+                                         ("long_name", "long_name")):
+                            if src in attrs and dst not in pf.variables[fq]:
+                                pf.variables[fq][dst] = attrs[src]
+                        continue
+                    info = {
+                        "dtype": str(obj.dtype),
+                        "dims": [f"dim{i}" for i in range(obj.ndim)],
+                        "shape": list(obj.shape),
+                        "attrs": attrs,
+                    }
+                    if "units" in attrs:
+                        info["units"] = attrs["units"]
+                    if "long_name" in attrs:
+                        info["long_name"] = attrs["long_name"]
+                    pf.variables[fq] = info
+
+            with h5py.File(p, "r") as h5f:
+                _walk(h5f, "")
+            if pf.swath_lat and pf.swath_lon:
+                pf.swath = True
+        except ImportError:
+            pf.warnings.append("h5py not installed — HDF5 groups not walked.")
+        except Exception as exc:  # noqa: BLE001
+            pf.warnings.append(f"HDF5 group walk failed: {exc!s}")
 
     return pf
 

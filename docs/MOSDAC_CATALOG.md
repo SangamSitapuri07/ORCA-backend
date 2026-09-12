@@ -132,3 +132,17 @@ for a complete PS 176 demo.
 
 **Catalog browser (public):** https://mosdac.gov.in/catalog-app/satellite.php  (satellites: EOS-06=id22, EOS-08=33, OCEANSAT-2=9, SCATSAT-1=15, INSAT-3DR=14, INSAT-3DS=24)
 **Official manual:** https://mosdac.gov.in/downloadapi-manual · client: https://mosdac.gov.in/software/mdapi.zip
+
+---
+
+## ⚠️ CORRECTIONS — 13 Sep 2026 (re-verified live)
+
+Three dataset IDs that circulated in the "blocked" verdict were wrong:
+
+| Wrong ID (HTTP 500) | Real ID (live) | Note |
+|---|---|---|
+| `E06SCT_L4_AWW6HOURLY` | **`E06SCT_L4_AWV6HOURLY`** | 4756 files; granules `E06SCTL4AH_YYYYDDD_HHMM_25km_v1.0.0.nc` |
+| `E06SCT_L3_WV12` | **`E06SCT_L2B_WV12`** | 50 615 files; L2B HDF5 swath, 2D per-pixel lat/lon |
+| — | `E06OCM_L3_LAC_CQ` (unchanged) | 157 files, daily, alive — earlier "no usable product" did not reproduce |
+
+Full evidence + the one-command unblock: **[MOSDAC_BLOCKED3_EVIDENCE.md](MOSDAC_BLOCKED3_EVIDENCE.md)**

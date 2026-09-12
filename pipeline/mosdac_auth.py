@@ -61,7 +61,22 @@ CHECKNET_URL = "https://mosdac.gov.in/download_api/check-internet"
 # datasets we actually use (verified live)
 DS_SST = "3RIMG_L2B_SST"          # INSAT-3DR Sea Surface Temperature
 DS_OCM_OC = "E06OCM_L2C_LAC_OC"   # EOS-06/Oceansat-3 OCM ocean colour (chlorophyll)
+
+# ── the "blocked three", re-verified live 2026-09-13 via apios search ──
+# The earlier block verdict searched TWO WRONG IDs: 'E06SCT_L4_AWW6HOURLY'
+# (typo — HTTP 500) and 'E06SCT_L3_WV12' (does not exist — HTTP 500).
+# Correct IDs, all confirmed returning live records, no login needed:
+DS_SCT_AWV6H = "E06SCT_L4_AWV6HOURLY"  # 6-hourly analyzed winds (particle filter)
+#   4756 files, ~7.9 MB each, E06SCTL4AH_YYYYDDD_HHMM_25km_v1.0.0.nc, global
+DS_OCM_CQ = "E06OCM_L3_LAC_CQ"         # daily coastal water quality composite
+#   157 files, ~2.7 MB each, E06OCML3CQ_YYYYMMDD_01km_LAC_v1.0.0.nc,
+#   bbox 68E-94E / 7N-24N (Indian subcontinent coast), current
+DS_SCT_WV12 = "E06SCT_L2B_WV12"        # L2B wind vectors, swath grid (12.5 km)
+#   50615 files, ~15 MB each, E06SCTL2B<YYYYDDD>_<rev>_<rev>_<NS|SN>_12km_*.h5
+#   NOTE: lat/lon are 2D per-pixel arrays inside the HDF5 → parser.py
+#   marks these as `swath`; use extractors.extract_wind_swath.
 BBOX_GUJARAT = "66.0,18.0,72.5,23.5"
+BBOX_INDIA_COAST = "68.0,7.0,94.0,24.0"  # matches the CQ product coverage
 
 
 class MosdacAuthError(Exception):

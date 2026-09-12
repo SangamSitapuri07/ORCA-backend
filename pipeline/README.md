@@ -8,11 +8,13 @@ the file parsers that turn raw NetCDF / HDF5 into values we can use.
 
 | File | What it does |
 | --- | --- |
-| `mosdac_auth.py` | Login to MOSDAC via Keycloak SSO, return a `requests.Session` with the bearer token attached |
-| `parser.py`       | Open NetCDF4 / HDF5 files, extract lat/lon + 2D variables into plain dicts |
-| `mosdac_search.py` | (coming next) Search for available files by dataset + date + bounding box |
-| `mosdac_download.py` | (coming next) Download a file to local disk with progress reporting |
-| `incois.py`        | (later) Pull operational advisories from INCOIS |
+| `mosdac_auth.py` | MOSDAC official download API: `gettoken` login → bearer `requests.Session`, plus OpenSearch `search()` + `download_file()`; dataset IDs incl. the verified-live `E06SCT_L4_AWV6HOURLY`, `E06OCM_L3_LAC_CQ`, `E06SCT_L2B_WV12` |
+| `parser.py`       | Open NetCDF-3/4 + HDF5 files (recursive group walk) into plain dicts; MOSDAC filename grammar incl. 6-hourly `AH` cycles and `L2B` swath heads; flags swath (2D per-pixel) geolocation |
+| `deepdump.py`     | Evidence-grade dump of one product file: sha256, all attrs, decoded per-variable stats, parseability checklist (`WIND-PARSE-READY` / `NOT-WIND`) |
+| `extractors.py`   | Domain extractors (chlorophyll, wind, upwelling) + `extract_wind_swath` for L2B per-pixel swath files |
+| `mosdac_ocm.py`   | LIVE EOS-06 OCM-3 chlorophyll chain (login → search → download → extract) |
+| `incois.py`, `incois_pfz.py` | INCOIS snapshots + official PFZ advisory lines |
+| `tools/unblock_mosdac.py` | One-command unblock: search/download real granules for the three datasets and write `docs/formats/*.md` evidence |
 
 ## Setup (one time, locally)
 
