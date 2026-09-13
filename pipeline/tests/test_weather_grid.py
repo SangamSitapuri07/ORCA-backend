@@ -200,4 +200,10 @@ def test_endpoint_demo_and_page():
         assert js.status_code == 200 and "weather/grid" in js.text
         for probe in ("selectLayer", "buildTinies", "palColor", "LAYERS", "pinLL"):
             assert probe in js.text, probe
+        # particle bounds guards must use the correct y orientation
+        # (by0 = north edge = smaller world-y than by1 = south edge);
+        # the inverted form made every particle respawn every tick and
+        # the particle animation silently never drew anything
+        assert "p.wy < by0 || p.wy > by1" in js.text
+        assert "p.wy < by1 || p.wy > by0" not in js.text
         assert "click to pin" in c.get("/map").text

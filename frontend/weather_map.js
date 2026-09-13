@@ -491,7 +491,7 @@ function drawParticles(dt, tt) {
     const w = sampleWind(lat, wLon(p.wx), tt);
     p.age++;
     if (!w || p.age > 100 + (p.age % 200) || p.wx < bx0 || p.wx > bx1 ||
-        p.wy < by1 || p.wy > by0) {
+        p.wy < by0 || p.wy > by1) {
       p.wx = bx0 + Math.random() * (bx1 - bx0);
       p.wy = by0 + Math.random() * (by1 - by0);
       p.age = 0;
@@ -543,7 +543,7 @@ function drawCurParticles(dt) {
     const u = sampleSea(lat, lon, 0, 'cu'), v = sampleSea(lat, lon, 0, 'cv');
     p.age++;
     if (u === null || v === null || p.age > 260 ||
-        p.wx < bx0 || p.wx > bx1 || p.wy < by1 || p.wy > by0) {
+        p.wx < bx0 || p.wx > bx1 || p.wy < by0 || p.wy > by1) {
       p.wx = bx0 + Math.random() * (bx1 - bx0);
       p.wy = by0 + Math.random() * (by1 - by0);
       p.age = 0;
