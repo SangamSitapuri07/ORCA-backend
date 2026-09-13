@@ -675,12 +675,21 @@ def weather_map_page():
     NEVER mix a cached HTML with a differently-versioned JS — a stale
     pair (old HTML lacking #fitbox + new JS wiring it) threw at startup
     and left a completely dead map that looked like 'play not working'.
+
+    Leaflet is vendored first-party (/frontend/vendor/) — the CDN copy
+    made the whole map die with 'L is not defined' on any network where
+    unpkg is unreachable (seen live in the sandbox 2026-09-13: zero
+    external egress, badge stuck on LOADING…, play did nothing).
     """
     from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
     root = Path(__file__).resolve().parent.parent
     html = (root / "frontend" / "weather_map.html").read_text()
     html = html.replace("/frontend/weather_map.js",
                         f"/frontend/weather_map.js?v={_GIT_COMMIT}")
+    html = html.replace("/frontend/vendor/leaflet.js",
+                        f"/frontend/vendor/leaflet.js?v={_GIT_COMMIT}")
+    html = html.replace("/frontend/vendor/leaflet.css",
+                        f"/frontend/vendor/leaflet.css?v={_GIT_COMMIT}")
     return HTMLResponse(html)
 
 
@@ -975,11 +984,51 @@ def live_stats() -> dict[str, Any]:
     return live.stats()
 
 
+def _graticule_tile_png(z: int, x: int, y: int) -> bytes:
+    """Offline fallback tile: deep-sea background + lat/lon graticule.
+
+    Served when the upstream OSM fetch fails (e.g. sandbox with no
+    external egress), so the basemap degrades to an intentional-looking
+    chart grid instead of a blank/broken grey canvas."""
+    from io import BytesIO
+    from PIL import Image, ImageDraw
+    import math
+
+    n = 1 << z
+
+    def lon_of(px):  # tile x-pixel -> longitude
+        return (x + px / 256.0) / n * 360.0 - 180.0
+
+    def lat_of(py):  # tile y-pixel -> latitude (Web Mercator)
+        t = math.pi * (1 - 2 * (y + py / 256.0) / n)
+        return math.degrees(math.atan(math.sinh(t)))
+
+    img = Image.new("RGB", (256, 256), (11, 22, 36))
+    d = ImageDraw.Draw(img)
+    # meridians / parallels at every whole degree (thicker every 5°)
+    for deg in range(-180, 181):
+        x0 = (deg + 180) / 360.0 * n * 256 - x * 256
+        if -1 <= x0 <= 256:
+            d.line([(x0, 0), (x0, 256)], fill=(38, 64, 92),
+                   width=2 if deg % 5 == 0 else 1)
+    for deg in range(-85, 86):
+        t = math.asinh(math.tan(math.radians(deg)))
+        y0 = (1 - t / math.pi) / 2.0 * n * 256 - y * 256
+        if -1 <= y0 <= 256:
+            d.line([(0, y0), (256, y0)], fill=(38, 64, 92),
+                   width=2 if deg % 5 == 0 else 1)
+    # label the corner coordinate faintly
+    d.text((6, 244), f"{lat_of(0):.1f}N {lon_of(0):.1f}E", fill=(74, 104, 132))
+    buf = BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
 @app.get("/api/v1/tiles/{z}/{x}/{y}.png")
 def osm_tile(z: int, x: int, y: int):
-    """Cached OpenStreetMap raster tile (PNG)."""
+    """Cached OpenStreetMap raster tile (PNG); offline graticule fallback."""
     import urllib.request
-    from fastapi.responses import FileResponse, RedirectResponse
+    from fastapi.responses import FileResponse, RedirectResponse, Response
 
     n = 1 << z if 0 <= z <= 19 else 0
     if not n or not (0 <= x < n and 0 <= y < n):
@@ -989,10 +1038,11 @@ def osm_tile(z: int, x: int, y: int):
         req = urllib.request.Request(
             f"https://tile.openstreetmap.org/{z}/{x}/{y}.png", headers=_TILE_HEADERS)
         try:
-            with urllib.request.urlopen(req, timeout=15) as r:
+            with urllib.request.urlopen(req, timeout=6) as r:
                 blob = r.read()
-        except Exception as e:  # noqa: BLE001
-            raise HTTPException(502, f"OSM tile fetch failed: {type(e).__name__}: {e}")
+        except Exception:  # noqa: BLE001 — offline: draw our own tile
+            return Response(_graticule_tile_png(z, x, y), media_type="image/png",
+                            headers={"Cache-Control": "public, max-age=300"})
         if not blob.startswith(b"\x89PNG"):
             raise HTTPException(502, "OSM tile server returned a non-PNG response")
         p.parent.mkdir(parents=True, exist_ok=True)

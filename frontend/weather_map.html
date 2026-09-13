@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ORCA Live Weather Map — Kutch</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="/frontend/vendor/leaflet.css">
 <style>
   :root { --panel: rgba(10, 22, 34, 0.82); --line: rgba(120, 150, 175, 0.35); }
   * { box-sizing: border-box; }
@@ -164,7 +164,23 @@
   basemap © OpenStreetMap contributors · ORCA-backend <code>/api/v1/weather/grid</code>
 </footer>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/frontend/vendor/leaflet.js"></script>
+<script>
+/* Early error net — registered BEFORE any app script so a failed asset
+ * load (e.g. leaflet) surfaces on screen instead of a silent dead map. */
+window.addEventListener('error', function (e) {
+  /* only REAL script errors — resource load failures (a tile, an image)
+   * must not flip the badge; with no egress every tile 404s and the
+   * badge would cry wolf on a perfectly working map */
+  if (!(e instanceof ErrorEvent) || !e.message) return;
+  var b = document.getElementById('modeBadge');
+  if (b) { b.textContent = '⚠ ' + e.message; b.style.color = '#ff6b6b'; }
+}, true);
+window.addEventListener('unhandledrejection', function (e) {
+  var b = document.getElementById('modeBadge');
+  if (b) { b.textContent = '⚠ ' + (e.reason && e.reason.message ? e.reason.message : 'async error'); b.style.color = '#ff6b6b'; }
+});
+</script>
 <script src="/frontend/weather_map.js"></script>
 </body>
 </html>

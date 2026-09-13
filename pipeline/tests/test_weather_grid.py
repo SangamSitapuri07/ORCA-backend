@@ -225,3 +225,15 @@ def test_endpoint_demo_and_page():
         assert "Math.max(0, Math.min(DATA.times.length - 1, Math.floor(tt)))" in js.text
         assert "weather_map.js?v=" in p.text
         assert "click to pin" in c.get("/map").text
+        # leaflet must be vendored first-party: a CDN copy dies with
+        # 'L is not defined' on any network without unpkg egress (seen
+        # live in the sandbox 2026-09-13 — badge stuck on LOADING…)
+        page_html = c.get("/map").text
+        assert "/frontend/vendor/leaflet.js?v=" in page_html
+        assert "/frontend/vendor/leaflet.css?v=" in page_html
+        assert "unpkg.com" not in page_html
+        # offline basemap: the tile proxy degrades to a drawn graticule
+        # tile instead of a 502 (never a blank/broken-looking map)
+        from backend.main import _graticule_tile_png
+        blob = _graticule_tile_png(7, 88, 56)
+        assert blob.startswith(b"\x89PNG") and len(blob) > 500
