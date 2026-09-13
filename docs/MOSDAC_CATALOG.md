@@ -142,7 +142,12 @@ Three dataset IDs that circulated in the "blocked" verdict were wrong:
 | Wrong ID (HTTP 500) | Real ID (live) | Note |
 |---|---|---|
 | `E06SCT_L4_AWW6HOURLY` | **`E06SCT_L4_AWV6HOURLY`** | 4756 files; granules `E06SCTL4AH_YYYYDDD_HHMM_25km_v1.0.0.nc` |
-| `E06SCT_L3_WV12` | **`E06SCT_L2B_WV12`** | 50 615 files; L2B HDF5 swath, 2D per-pixel lat/lon |
+| `E06SCT_L3_WV12` | **`E06SCT_L3_WW12`** (gridded L3) and **`E06SCT_L2B_WV12`** (swath L2B) | WW12: 1069 files, ~47 MB, `E06SCTL3WW<YYYYDDD>_12km_v1.0.5.h5` — **the supplied h5 sample IS this product** (gId=18400558); L2B WV12: 50 615 files, in-file 2D lat/lon |
 | — | `E06OCM_L3_LAC_CQ` (unchanged) | 157 files, daily, alive — earlier "no usable product" did not reproduce |
 
-Full evidence + the one-command unblock: **[MOSDAC_BLOCKED3_EVIDENCE.md](MOSDAC_BLOCKED3_EVIDENCE.md)**
+Also verified live: `E06SCT_L4_AWV` (1330 files) and `E06SCT_L4_AWV12km`
+(393 files) exist; the `…_AWW…` spellings do not (HTTP 500).
+
+Full evidence + the one-command unblock: **[MOSDAC_BLOCKED3_EVIDENCE.md](MOSDAC_BLOCKED3_EVIDENCE.md)** ·
+root-cause analysis of the same three in the sister repo
+`prabhbani/ORCA-SIH-2026`: **[SIH2026_BACKEND_DIAGNOSIS.md](SIH2026_BACKEND_DIAGNOSIS.md)**

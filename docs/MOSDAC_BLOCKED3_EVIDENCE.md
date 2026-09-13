@@ -127,3 +127,13 @@ For each dataset, gate on what the dump actually shows:
 Until those dumps exist, the datasets stay disabled — the honesty rule
 is unchanged. What changed: the blocker is now a 10-minute errand, not a
 mystery.
+
+## 5. Sister-repo postscript (13 Sep 2026)
+
+The same "blocked three" verdict also lives in
+`prabhbani/ORCA-SIH-2026`'s backend (`backend/mosdac_datasets.py` etc.).
+Root causes there: the two typo IDs above, a third wrong ID for the
+supplied h5 (its real dataset is `E06SCT_L3_WW12`, 1069 live files),
+guessed variable names (`wind_speed`, `water_quality`), an always-raise
+HDF5 stub parser, and a 12 s provider timeout. Full chain-by-chain
+analysis with code references: **[SIH2026_BACKEND_DIAGNOSIS.md](SIH2026_BACKEND_DIAGNOSIS.md)**.
