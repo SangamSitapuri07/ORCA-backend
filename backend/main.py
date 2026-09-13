@@ -566,13 +566,72 @@ def get_humidity(
     per 0.1° centre + span + forecast hour."""
     from pipeline.humidity import get_humidity_field
     try:
-        return _with_deadline(
+        res = _with_deadline(
             lambda: get_humidity_field(lat, lon, span, hours), 45, "humidity",
         )
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"humidity fetch failed: {type(e).__name__}: {e}")
+    if isinstance(res, dict) and res.get("error"):
+        raise HTTPException(status_code=500, detail=res["error"])
+    return res
+
+
+# ── Animated weather grid + live map page (zoom.earth-style) ────────
+
+@app.get("/api/v1/weather/grid")
+def weather_grid(
+    lat: float | None = Query(None, ge=-90, le=90),
+    lon: float | None = Query(None, ge=-180, le=180),
+    span: float = Query(3.0, gt=0.0, le=30.0),
+    frames: int = Query(8, ge=2, le=25),
+    grid: int = Query(9, ge=3, le=16),
+    demo: bool = Query(False),
+) -> dict[str, Any]:
+    """Multi-hour wind+humidity+temperature grid (DWD ICON via Open-Meteo)
+    feeding the animated map at /map. ONE call returns every frame so the
+    frontend can animate colours and wind particles without refetching.
+    ?demo=1 (no other params needed) serves the bundled REAL ICON snapshot
+    — honest offline fallback, labelled demo:true with its fetch time."""
+    from pipeline.weather_demo_snapshot import demo_payload
+    from pipeline.weather_grid import get_weather_grid
+    if demo:
+        return demo_payload()
+    if lat is None or lon is None:
+        raise HTTPException(status_code=422,
+                            detail="lat and lon are required unless ?demo=1")
+    try:
+        res = _with_deadline(
+            lambda: get_weather_grid(lat, lon, span, frames, grid), 60, "weather_grid",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500,
+                            detail=f"weather grid fetch failed: {type(e).__name__}: {e}")
+    if isinstance(res, dict) and res.get("error"):
+        raise HTTPException(status_code=500, detail=res["error"])
+    return res
+
+
+@app.get("/map", include_in_schema=False)
+def weather_map_page():
+    """The interactive animated weather map (wind particles + humidity
+    colours + time slider) — served first-party, no build step."""
+    from fastapi.responses import FileResponse
+    root = Path(__file__).resolve().parent.parent
+    return FileResponse(str(root / "frontend" / "weather_map.html"),
+                        media_type="text/html")
+
+
+try:  # static assets for the map page (js); mount only if the dir exists
+    from fastapi.staticfiles import StaticFiles
+    _fe_dir = Path(__file__).resolve().parent.parent / "frontend"
+    if _fe_dir.is_dir():
+        app.mount("/frontend", StaticFiles(directory=str(_fe_dir)), name="frontend")
+except Exception:  # pragma: no cover — never block API startup on static
+    pass
 
 
 # ── OSM tile proxy: real map tiles for the 3D ocean surface ────────

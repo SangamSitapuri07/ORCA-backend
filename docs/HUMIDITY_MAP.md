@@ -126,6 +126,13 @@ endpoint tests read the palette dynamically).
 5. **Dew-point bonus**: `dew_depression_c` (T − Td) is served per point; low values
    (< 2 °C) ≈ fog/condensation risk — useful for the fishermen's advisory UX.
 
+## The full animated map
+
+This endpoint serves one hour at a time. For the **zoom.earth-style live
+map** — animated wind particles, colours flowing through forecast hours,
+time slider — see `docs/LIVE_WEATHER_MAP.md` and open **`/map`** on the
+running backend (feed: `GET /api/v1/weather/grid`).
+
 ## What it looks like
 
 `docs/humidity_preview_kutch.png` — rendered from a **live DWD ICON run**

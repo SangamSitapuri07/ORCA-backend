@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ORCA Live Weather Map — Kutch</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --panel: rgba(10, 22, 34, 0.82); --line: rgba(120, 150, 175, 0.35); }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #0b1622; overflow: hidden;
+               font-family: "Segoe UI", system-ui, -apple-system, sans-serif; }
+  #map { position: absolute; inset: 0; background: #0b1622; }
+  .leaflet-container { background: #0b1622; }
+
+  /* canvases float above the tiles, below the controls; no pointer events */
+  #overlay { position: absolute; inset: 0; z-index: 450; pointer-events: none; }
+  #overlay canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+  .panel { position: absolute; z-index: 1100; background: var(--panel);
+           border: 1px solid var(--line); border-radius: 10px; color: #e8f1f8;
+           backdrop-filter: blur(6px); }
+
+  header { top: 12px; left: 12px; padding: 10px 14px; max-width: 430px; }
+  header h1 { margin: 0 0 2px; font-size: 16px; letter-spacing: 0.3px; }
+  header .sub { font-size: 11.5px; color: #9db4c8; }
+  .badge { display: inline-block; margin-top: 7px; padding: 2px 9px; border-radius: 20px;
+           font-size: 10.5px; font-weight: 600; letter-spacing: 0.4px; }
+  .badge.live  { background: rgba(46, 158, 143, 0.22); color: #58d6c6;
+                 border: 1px solid rgba(46, 158, 143, 0.55); }
+  .badge.demo  { background: rgba(230, 126, 34, 0.20); color: #f0b26b;
+                 border: 1px solid rgba(230, 126, 34, 0.55); }
+  .badge .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+                margin-right: 5px; background: currentColor; }
+  .badge.live .dot { animation: pulse 1.6s infinite; }
+  @keyframes pulse { 0%,100% {opacity: 1;} 50% {opacity: 0.25;} }
+
+  #hud { top: 12px; right: 12px; padding: 9px 13px; font-size: 12px; min-width: 205px; }
+  #hud .row { display: flex; justify-content: space-between; gap: 14px; line-height: 1.55; }
+  #hud .k { color: #9db4c8; }
+  #hud .v { font-weight: 600; font-variant-numeric: tabular-nums; }
+  #hud .hint { margin-top: 5px; font-size: 10.5px; color: #7e93a6; }
+
+  #controls { left: 50%; transform: translateX(-50%); bottom: 14px; padding: 10px 16px 12px;
+              width: min(680px, calc(100vw - 24px)); }
+  #controls .top { display: flex; align-items: center; gap: 12px; }
+  #play { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--line);
+          background: rgba(46,158,143,0.18); color: #58d6c6; font-size: 14px; cursor: pointer;
+          display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+  #play:hover { background: rgba(46,158,143,0.32); }
+  #tlabel { font-size: 12.5px; font-weight: 600; min-width: 190px; text-align: center;
+            font-variant-numeric: tabular-nums; color: #e8f1f8; }
+  #tslider { flex: 1; accent-color: #2e9e8f; height: 4px; cursor: pointer; }
+  #controls .bottom { display: flex; align-items: center; gap: 16px; margin-top: 9px;
+                      flex-wrap: wrap; }
+  #legendbar { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 300px; }
+  #legendgrad { flex: 1; height: 12px; border-radius: 3px; border: 1px solid var(--line); }
+  #legendbar .ticks { display: flex; justify-content: space-between; flex: 1;
+                      font-size: 9.5px; color: #9db4c8; }
+  .toggles { display: flex; gap: 11px; font-size: 11.5px; color: #c6d6e2; }
+  .toggles label { cursor: pointer; user-select: none; display: flex; gap: 5px;
+                   align-items: center; }
+  .toggles input { accent-color: #2e9e8f; }
+
+  #status { left: 50%; transform: translateX(-50%); top: 76px; padding: 8px 16px;
+            font-size: 12.5px; display: none; }
+  #status.err { color: #f0b26b; }
+  footer { position: absolute; z-index: 1100; bottom: 14px; left: 12px; font-size: 10px;
+           color: #61788c; line-height: 1.5; text-shadow: 0 1px 2px #000; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="overlay"><canvas id="field"></canvas><canvas id="particles"></canvas></div>
+
+<header class="panel">
+  <h1>ORCA Live Weather Map — Kutch &amp; Saurashtra</h1>
+  <div class="sub">2 m humidity colours · 10 m wind particles · DWD ICON global via Open-Meteo</div>
+  <span class="badge live" id="modeBadge"><span class="dot"></span>LOADING…</span>
+</header>
+
+<div id="hud" class="panel">
+  <div class="row"><span class="k">Position</span><span class="v" id="hPos">—</span></div>
+  <div class="row"><span class="k">Humidity (2 m)</span><span class="v" id="hRh">—</span></div>
+  <div class="row"><span class="k">Wind (10 m)</span><span class="v" id="hWind">—</span></div>
+  <div class="row"><span class="k">Temperature</span><span class="v" id="hTemp">—</span></div>
+  <div class="hint" id="hHint">move the cursor over the map</div>
+</div>
+
+<div id="status" class="panel"></div>
+
+<div id="controls" class="panel">
+  <div class="top">
+    <button id="play" title="play / pause">▶</button>
+    <input id="tslider" type="range" min="0" max="700" value="0" step="1">
+    <div id="tlabel">—</div>
+  </div>
+  <div class="bottom">
+    <div id="legendbar">
+      <span style="font-size:10.5px;color:#9db4c8">RH&nbsp;%</span>
+      <div style="flex:1">
+        <div id="legendgrad"></div>
+        <div class="ticks" id="legendticks"></div>
+      </div>
+    </div>
+    <div class="toggles">
+      <label><input type="checkbox" id="tgHum" checked> humidity</label>
+      <label><input type="checkbox" id="tgWind" checked> wind</label>
+      <label><input type="checkbox" id="tgRef" checked> grid</label>
+    </div>
+  </div>
+</div>
+
+<footer>
+  data: DWD ICON global via Open-Meteo (CC-BY-4.0) · same model as zoom.earth's humidity layer<br>
+  basemap © OpenStreetMap contributors · ORCA-backend <code>/api/v1/weather/grid</code>
+</footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/frontend/weather_map.js"></script>
+</body>
+</html>

@@ -1,0 +1,150 @@
+# Live Animated Weather Map (zoom.earth-style) — ORCA-backend
+
+**Open it:** start the backend and visit **`/map`** — interactive map with
+animated wind particles, humidity colours that flow through the forecast
+hours, a time slider, hover readout, and layer toggles. Same underlying
+model as zoom.earth (DWD ICON global via Open-Meteo), rebuilt first-party.
+
+```
+GET /map                          → the map page (no build step, Leaflet from CDN)
+GET /api/v1/weather/grid?...      → the animation feed (below)
+GET /api/v1/weather/grid?demo=1   → bundled REAL ICON snapshot (offline fallback)
+```
+
+## Architecture
+
+```
+browser (/map)
+ ├─ Leaflet + OSM tiles via first-party proxy /api/v1/tiles/{z}/{x}/{y}.png
+ ├─ #field canvas     humidity colours: per-frame 9×9 (or 12×12) rasters
+ │                    cross-faded between hourly frames, HALF-CELL-CORRECT
+ │                    stretch (grid point i lands at i·cell px — the same
+ │                    fix proven in scripts/render_humidity_preview.py)
+ ├─ #particles canvas ~1–2k particles advected through the time-interpolated
+ │                    10 m wind field; mercator-correct speeds; fading
+ │                    trails (destination-out); positions in WORLD px so
+ │                    they stay geo-glued while panning
+ └─ HUD               bilinear sampling of u/v/rh/temp at the cursor;
+                     wind direction = (270 − atan2(v,u)) % 360 — ORCA's
+                     corrected compass convention
+backend
+ └─ GET /api/v1/weather/grid — ONE Open-Meteo call for the whole grid ×
+    all frames (zip-paired coordinate lists, models=icon_global,
+    wind_speed_unit=ms), cached 30 min per centre+span+frames+grid
+```
+
+## Endpoint contract
+
+```
+GET /api/v1/weather/grid?lat=22.2&lon=69.4&span=3.0&frames=8&grid=12
+```
+
+| param | range | default | meaning |
+|-------|-------|---------|---------|
+| `lat`, `lon` | ±90 / ±180 | required (live) | centre of the box |
+| `span` | 0 < s ≤ 30 | 3.0 | **full width** of the box (3 → 3°×3°) |
+| `frames` | 2…25 | 8 | hourly frames returned (8 = now…+7 h) |
+| `grid` | 3…16 | 9 | grid is grid×grid points |
+| `demo` | — | false | `1` → serve the bundled snapshot (ignores lat/lon) |
+
+Response (compact — built for animation, one value per point per frame):
+
+```jsonc
+{
+  "demo": false, "fetched_at": "2026-09-13T07:41:00+00:00",
+  "model": "icon_global (DWD ICON global) via Open-Meteo — …",
+  "center": {"lat": 22.2, "lon": 69.4},
+  "span_deg": 3.0, "grid_n": 9, "step_deg": 0.375,
+  "times": ["2026-09-13T07:00", … ],        // UTC, hourly
+  "lats": [23.7, … 20.7],                   // 9 row lats, DESCENDING (N→S)
+  "lons": [67.9, … 70.9],                   // 9 col lons, ascending
+  "u":   [[…81 m/s], … per frame],          // eastward component (derived)
+  "v":   [[…], …],                          // northward component (derived)
+  "rh":  [[…], …], "temp": [[…], …],
+  "legend": [{value, color, label}, …]      // same palette as /api/v1/humidity
+}
+```
+
+Points are **row-major north→south**: point index `p = row*grid_n + col`.
+Missing values are `null` — never fabricated. Errors are honest HTTP 500s.
+
+## Wire-format facts (verified live 2026-09-13)
+
+- `models=icon_global` — bare `icon` is rejected ("Cannot initialize
+  MultiDomains").
+- **u/v components are NOT variables** on this endpoint
+  (`u_wind_component_10m` → HTTP 400). We request
+  `wind_speed_10m,wind_direction_10m` with `wind_speed_unit=ms` and derive
+  `u = −s·sin θ`, `v = −s·cos θ`. Round-trips exactly to the reported
+  FROM-direction — pinned by `test_uv_from_speed_and_direction`.
+- Multi-coordinate responses come back as a **zip-paired list** of
+  location objects (single-coordinate can return a bare dict; normalised).
+
+## Demo mode — honest, never fabricated
+
+`pipeline/weather_demo_snapshot.py` embeds a **real** DWD ICON run
+(2026-09-13 07:00–14:00 UTC, Kutch 9×9, wind+RH+temp) fetched and relayed
+verbatim (the build sandbox has no direct egress to open-meteo.com; the
+payload was pulled row-by-row so no proxy chunk ever split a value). The
+page tries the live endpoint first; if it fails it falls back to
+`?demo=1` and clearly badges itself **“DEMO — REAL ICON SNAPSHOT”** in
+amber. Integrity is enforced by tests: shapes, ranges, and a **567-value
+cross-check** against an independent earlier transcription of the same
+model run (shifted one hour) — zero mismatches.
+
+## What you should see (Kutch demo)
+
+- **Colours:** dry orange-yellow over the Rann interior (RH ~42–52 %),
+  moist teal-blue over the Arabian Sea (~83–87 %) and Saurashtra coast —
+  animating through 8 hours as the slider plays (RH range drifts
+  48–89 % → 71–97 %: the interior moistens in the evening).
+- **Wind:** monsoon westerlies flowing east over the sea (25–35 km/h,
+  from ~270°), near-calm swirls over the Rann — particles move at a
+  time-accelerated rate (~5 simulated hours per real second, like
+  earth.nullschool.net).
+- **Hover:** RH, wind speed/dir (m/s, km/h, compass), temperature at the
+  cursor, at the displayed (interpolated) time.
+
+## Production behaviour vs preview sandbox
+
+- **Production (backend with internet):** badge shows LIVE; the grid
+  follows the viewport (re-fetched, debounced, on pan/zoom); OSM tiles
+  render under the field.
+- **This build sandbox:** no egress to open-meteo/OSM → the live attempt
+  fails in <50 ms (honest 500), the page falls back to the demo snapshot,
+  and the basemap stays dark — the data field + particles + graticule +
+  city anchors carry the visuals.
+
+## SIH-2026 porting (prabhbani/ORCA-SIH-2026)
+
+Copy verbatim (no new backend deps; stdlib only):
+`pipeline/weather_grid.py`, `pipeline/weather_demo_snapshot.py`,
+`frontend/weather_map.html`, `frontend/weather_map.js`, and the two tests.
+Wire in their `routes_v1.py`:
+
+```python
+@router.get("/weather/grid")
+def weather_grid(lat: float, lon: float, span: float = 3.0,
+                 frames: int = 8, grid: int = 9, demo: bool = False):
+    from pipeline.weather_demo_snapshot import demo_payload
+    from pipeline.weather_grid import get_weather_grid
+    if demo:
+        return demo_payload()
+    return get_weather_grid(lat, lon, span, frames, grid)
+```
+
+Serve `frontend/` statically (or inline it) at `/map`. Their Leaflet map
+can reuse the two canvases as an overlay pane for the existing views.
+Palette lives in ONE place per side — `pipeline/humidity.py:PALETTE` and
+its JS mirror at the top of `weather_map.js` — keep them in sync (the
+endpoint also ships `legend`, so the frontend can build from data).
+
+## Files
+
+| path | what |
+|------|------|
+| `frontend/weather_map.html` | page shell, dark UI, controls, legend |
+| `frontend/weather_map.js` | canvases, particle engine, time engine, HUD |
+| `pipeline/weather_grid.py` | live multi-frame grid (one API call) |
+| `pipeline/weather_demo_snapshot.py` | real ICON snapshot + integrity story |
+| `pipeline/tests/test_weather_grid.py` | 11 offline tests incl. wire contract + snapshot cross-check |
