@@ -252,6 +252,7 @@ def _api_info() -> dict[str, Any]:
             "/api/v1/advisory",
             "/map (live weather map)",
             "/api/v1/weather/grid (animation feed)",
+            "/api/v1/ocean/grid (currents+waves+sst)",
             "/api/v1/humidity",
             "/api/v1/layers",
             "/api/v1/alerts",
@@ -624,6 +625,42 @@ def weather_grid(
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500,
                             detail=f"weather grid fetch failed: {type(e).__name__}: {e}")
+    if isinstance(res, dict) and res.get("error"):
+        raise HTTPException(status_code=500, detail=res["error"])
+    return res
+
+
+@app.get("/api/v1/ocean/grid")
+def ocean_grid(
+    lat: float | None = Query(None, ge=-90, le=90),
+    lon: float | None = Query(None, ge=-180, le=180),
+    span: float = Query(3.0, gt=0.0, le=30.0),
+    frames: int = Query(8, ge=2, le=25),
+    grid: int = Query(9, ge=3, le=16),
+    demo: bool = Query(False),
+) -> dict[str, Any]:
+    """Sea layers for the animated map: satellite geostrophic CURRENTS
+    (NOAA CoastWatch altimetry, daily), sea-surface TEMPERATURE (NOAA Coral
+    Reef Watch CoralTemp, daily) and hourly WAVE forecast (Open-Meteo
+    Marine). Same lattice as /weather/grid so the frontend renders both
+    with one engine. Land cells are null — that IS the coastline mask.
+    ?demo=1 serves the bundled REAL snapshot (2026-09-13)."""
+    from pipeline.ocean_demo_snapshot import demo_payload
+    from pipeline.ocean_grid import get_ocean_grid
+    if demo:
+        return demo_payload(frames)
+    if lat is None or lon is None:
+        raise HTTPException(status_code=422,
+                            detail="lat and lon are required unless ?demo=1")
+    try:
+        res = _with_deadline(
+            lambda: get_ocean_grid(lat, lon, span, frames, grid), 60, "ocean_grid",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500,
+                            detail=f"ocean grid fetch failed: {type(e).__name__}: {e}")
     if isinstance(res, dict) and res.get("error"):
         raise HTTPException(status_code=500, detail=res["error"])
     return res

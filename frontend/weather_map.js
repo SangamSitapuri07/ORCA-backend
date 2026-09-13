@@ -1,8 +1,10 @@
 /* ORCA live weather map — zoom.earth-style animated layer.
  *
  * Data: GET /api/v1/weather/grid (DWD ICON via Open-Meteo) — one call,
- * all frames. Falls back to the bundled REAL snapshot (?demo=1, clearly
- * badged) when the live API is unreachable.
+ * all frames — plus GET /api/v1/ocean/grid (NOAA satellite currents +
+ * CoralTemp SST + Open-Meteo Marine waves). Each falls back to its
+ * bundled REAL snapshot (?demo=1, clearly badged) when live is
+ * unreachable.
  *
  * Rendering: two stacked canvases over a Leaflet map —
  *   #field     humidity colours (crossfaded between hourly frames,
@@ -32,10 +34,44 @@ function colorFor(rh) {
           Math.round(a[2] + f * (b[2] - a[2])),
           Math.round(a[3] + f * (b[3] - a[3]))];
 }
+/* sea-surface temperature palette (°C → colour) */
+const SST_PALETTE = [
+  [25.0, 0x21, 0x66, 0xAC], [26.5, 0x43, 0x93, 0xC3], [27.5, 0x92, 0xC5, 0xDE],
+  [28.0, 0xFD, 0xB8, 0x63], [28.5, 0xE0, 0x82, 0x14], [29.0, 0xB2, 0x18, 0x2B],
+];
+function colorForSst(t) {
+  if (t === null || t === undefined || isNaN(t)) return [0, 0, 0, 0];
+  const v = Math.max(SST_PALETTE[0][0], Math.min(SST_PALETTE[SST_PALETTE.length - 1][0], t));
+  let i = 0;
+  while (i < SST_PALETTE.length - 2 && v > SST_PALETTE[i + 1][0]) i++;
+  const a = SST_PALETTE[i], b = SST_PALETTE[i + 1];
+  const f = (v - a[0]) / (b[0] - a[0] || 1);
+  return [0, Math.round(a[1] + f * (b[1] - a[1])),
+          Math.round(a[2] + f * (b[2] - a[2])),
+          Math.round(a[3] + f * (b[3] - a[3]))];
+}
+/* wave-height palette (m → colour), mirrors ocean_grid.wave_legend */
+const WAVE_PALETTE = [
+  [0.0, 0x1B, 0x4F, 0x72], [0.5, 0x2E, 0x86, 0xC1], [1.0, 0x48, 0xC9, 0xB0],
+  [1.5, 0xF4, 0xD0, 0x3F], [2.0, 0xE6, 0x7E, 0x22], [3.0, 0xB0, 0x3A, 0x2E],
+  [4.0, 0x64, 0x1E, 0x16],
+];
+function colorForWave(h) {
+  if (h === null || h === undefined || isNaN(h)) return [0, 0, 0, 0];
+  const v = Math.max(0, Math.min(4, h));
+  let i = 0;
+  while (i < WAVE_PALETTE.length - 2 && v > WAVE_PALETTE[i + 1][0]) i++;
+  const a = WAVE_PALETTE[i], b = WAVE_PALETTE[i + 1];
+  const f = (v - a[0]) / (b[0] - a[0] || 1);
+  return [Math.round(a[1] + f * (b[1] - a[1])),
+          Math.round(a[2] + f * (b[2] - a[2])),
+          Math.round(a[3] + f * (b[3] - a[3]))];
+}
 const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
                  'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
 const IST_MIN = 330;                       // UTC + 5:30
 const SIM_RATE = 20000;                    // sim-seconds per real-second
+const CUR_SIM_RATE = SIM_RATE * 8;         // currents displayed 8× true speed
 const HOURS_PER_SEC = 0.9;                 // time-slider playback speed
 const CITIES = [['Bhuj', 23.24, 69.67], ['Dwarka', 22.24, 68.97],
                 ['Jamnagar', 22.47, 70.06], ['Rajkot', 22.30, 70.80],
@@ -43,9 +79,10 @@ const CITIES = [['Bhuj', 23.24, 69.67], ['Dwarka', 22.24, 68.97],
 
 /* ── state ── */
 let DATA = null, DEMO = false, loading = false;
+let ODATA = null, ODEMO = false, tinySst = null;
 let t = 0, playing = true, lastTs = 0, needsField = true, lastDrawnT = -1;
 let cursorLL = null, tinies = [];
-let particles = [], origin = {x: 0, y: 0}, scale = 1;
+let particles = [], curParticles = [], origin = {x: 0, y: 0}, scale = 1;
 
 const map = L.map('map', {zoomControl: true, attributionControl: true,
                           minZoom: 4, maxZoom: 17, worldCopyJump: false})
@@ -93,7 +130,9 @@ document.querySelectorAll('.bm').forEach(b => b.addEventListener('click', () => 
 }));
 
 const fC = document.getElementById('field'), pC = document.getElementById('particles');
+const wC = document.getElementById('wavemark'), cC = document.getElementById('currents');
 const fx = fC.getContext('2d'), px = pC.getContext('2d');
+const wx = wC.getContext('2d'), cx = cC.getContext('2d');
 const $ = (id) => document.getElementById(id);
 
 /* ── mercator helpers (world px) ── */
@@ -120,9 +159,11 @@ async function loadGrid(followView) {
     span = Math.max(0.6, Math.min(30, span));
   }
   const base = '/api/v1/weather/grid';
+  const q = `?lat=${c.lat.toFixed(3)}&lon=${c.lng.toFixed(3)}` +
+            `&span=${span.toFixed(2)}&frames=8&grid=12`;
+  loadOcean(q);                       // parallel; independent fallback
   try {
-    const r = await fetch(`${base}?lat=${c.lat.toFixed(3)}&lon=${c.lng.toFixed(3)}` +
-                          `&span=${span.toFixed(2)}&frames=8&grid=12`);
+    const r = await fetch(base + q);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     DATA = await r.json();
     if (DATA.error) throw new Error(DATA.error);
@@ -135,6 +176,62 @@ async function loadGrid(followView) {
     DEMO = true;
   }
   onData(followView);
+}
+
+async function loadOcean(q) {
+  const base = '/api/v1/ocean/grid';
+  try {
+    const r = await fetch(base + q);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    ODATA = await r.json();
+    if (ODATA.error) throw new Error(ODATA.error);
+    ODEMO = false;
+  } catch (e) {
+    if (!ODEMO) {
+      try {
+        const r2 = await fetch(base + '?demo=1');
+        if (r2.ok) { ODATA = await r2.json(); ODEMO = true; }
+      } catch (e2) { /* sea layers simply stay off */ }
+    }
+  }
+  onOceanData();
+}
+
+function onOceanData() {
+  if (!ODATA) return;
+  /* single tiny raster: SST colours where the satellite sees water,
+   * transparent on land (drawn OVER the humidity wash) */
+  const n = ODATA.grid_n;
+  const cv = document.createElement('canvas');
+  cv.width = n; cv.height = n;
+  const c2 = cv.getContext('2d');
+  const img = c2.createImageData(n, n);
+  for (let p = 0; p < n * n; p++) {
+    const col = colorForSst(ODATA.sst[p]);
+    img.data[p * 4] = col[1]; img.data[p * 4 + 1] = col[2];
+    img.data[p * 4 + 2] = col[3]; img.data[p * 4 + 3] = col[0] ? 225 : 0;
+  }
+  c2.putImageData(img, 0, 0);
+  tinySst = cv;
+  curRespawn(); needsField = true;
+  updateBadge(); buildLegend();
+}
+
+function updateBadge() {
+  const badge = $('modeBadge');
+  if (DEMO && ODEMO) {
+    badge.className = 'badge demo';
+    badge.innerHTML = '<span class="dot"></span>DEMO — REAL SNAPSHOTS · ICON 13 SEP 07Z · CURRENTS 10Z · SST 11Z · WAVES 13 SEP 08Z';
+  } else if (DEMO) {
+    badge.className = 'badge demo';
+    badge.innerHTML = '<span class="dot"></span>LIVE OCEAN · WEATHER DEMO (ICON 13 SEP 07Z)';
+  } else if (ODEMO) {
+    badge.className = 'badge demo';
+    badge.innerHTML = '<span class="dot"></span>LIVE ICON · OCEAN DEMO (13 SEP SNAPSHOTS)';
+  } else if (DATA) {
+    badge.className = 'badge live';
+    badge.innerHTML = '<span class="dot"></span>LIVE · DWD ICON + NOAA SATELLITE · ' + DATA.fetched_at.slice(11, 16) + ' UTC';
+  }
 }
 
 function onData(fitIt) {
@@ -158,14 +255,7 @@ function onData(fitIt) {
     tinies.push(cv);
   }
   buildLegend();
-  const badge = $('modeBadge');
-  if (DEMO) {
-    badge.className = 'badge demo';
-    badge.innerHTML = '<span class="dot"></span>DEMO — REAL ICON SNAPSHOT · 13 SEP 07:00 UTC';
-  } else {
-    badge.className = 'badge live';
-    badge.innerHTML = '<span class="dot"></span>LIVE · DWD ICON · ' + DATA.fetched_at.slice(11, 16) + ' UTC';
-  }
+  updateBadge();
   if (fitIt) {
     map.fitBounds([[DATA.lats[n - 1], DATA.lons[0]], [DATA.lats[0], DATA.lons[n - 1]]],
                   {padding: [24, 24]});
@@ -201,6 +291,36 @@ function sampleWind(lat, lon, tt) {
   return {u, v};
 }
 
+/* ── sea sampling (lattice of ODATA; daily fields constant, waves hourly) ── */
+function sampleSea(lat, lon, frame, key) {
+  if (!ODATA) return null;
+  const n = ODATA.grid_n, lats = ODATA.lats, lons = ODATA.lons;
+  if (lat > lats[0] || lat < lats[n - 1] || lon < lons[0] || lon > lons[n - 1]) return null;
+  let r = 0, c = 0;
+  while (r < n - 2 && lat < lats[r + 1]) r++;
+  while (c < n - 2 && lon > lons[c + 1]) c++;
+  const fr = (lats[r] - lat) / (lats[r] - lats[r + 1]);
+  const fc = (lon - lons[c]) / (lons[c + 1] - lons[c]);
+  const arr = (key === 'cu' || key === 'cv' || key === 'sst') ? ODATA[key] : ODATA[key][frame];
+  if (!arr) return null;
+  const i00 = arr[r * n + c], i10 = arr[r * n + c + 1];
+  const i01 = arr[(r + 1) * n + c], i11 = arr[(r + 1) * n + c + 1];
+  if (i00 === null || i10 === null || i01 === null || i11 === null) return null;
+  return (i00 * (1 - fc) + i10 * fc) * (1 - fr) + (i01 * (1 - fc) + i11 * fc) * fr;
+}
+/* map the weather clock onto the nearest wave frame (times are UTC) */
+function waveFrameAt(tt) {
+  if (!ODATA || !ODATA.times.length || !DATA || !DATA.times.length) return 0;
+  const fA = Math.max(0, Math.min(DATA.times.length - 1, Math.floor(tt)));
+  const target = parseT(DATA.times[fA])[1] + (tt - fA) * 60;   // minutes UTC
+  let best = 0, bd = Infinity;
+  for (let i = 0; i < ODATA.times.length; i++) {
+    const d = Math.abs(parseT(ODATA.times[i])[1] - target);
+    if (d < bd) { bd = d; best = i; }
+  }
+  return best;
+}
+
 /* ── field layer ── */
 function drawField(tt) {
   const W = fC.clientWidth, H = fC.clientHeight;
@@ -224,6 +344,8 @@ function drawField(tt) {
       fx.drawImage(tinies[fB], ...rect);
       fx.globalAlpha = 1;
     }
+    /* satellite SST paints OVER water cells only (transparent on land) */
+    if ($('tgSst').checked && tinySst) fx.drawImage(tinySst, ...rect);
   }
   if ($('tgRef').checked) drawRef(p0, p1);
   fx.strokeStyle = 'rgba(150,180,205,0.5)'; fx.lineWidth = 1.5;
@@ -315,6 +437,97 @@ function drawParticles(dt, tt) {
   px.stroke();
 }
 
+/* ── current particles (satellite geostrophic flow, cyan, slower) ── */
+function curRespawn() {
+  curParticles = [];
+  if (!ODATA) return;
+  const n = ODATA.grid_n;
+  const bx0 = mX(ODATA.lons[0]), bx1 = mX(ODATA.lons[n - 1]);
+  const by0 = mY(ODATA.lats[0]), by1 = mY(ODATA.lats[n - 1]);
+  const count = Math.max(120, Math.min(900,
+      Math.round((bx1 - bx0) * (by1 - by0) / 1400)));
+  for (let i = 0; i < count; i++) {
+    curParticles.push({wx: bx0 + Math.random() * (bx1 - bx0),
+                       wy: by0 + Math.random() * (by1 - by0),
+                       age: Math.random() * 300});
+  }
+}
+function drawCurParticles(dt) {
+  const W = cC.clientWidth, H = cC.clientHeight;
+  cx.globalCompositeOperation = 'destination-out';
+  cx.fillStyle = 'rgba(0,0,0,0.06)';
+  cx.fillRect(0, 0, W, H);
+  cx.globalCompositeOperation = 'source-over';
+  if (!ODATA || !$('tgCur').checked) return;
+  const n = ODATA.grid_n;
+  const bx0 = mX(ODATA.lons[0]), bx1 = mX(ODATA.lons[n - 1]);
+  const by0 = mY(ODATA.lats[0]), by1 = mY(ODATA.lats[n - 1]);
+  const pxPerM = scale / 40075016.686;
+  cx.strokeStyle = 'rgba(0,229,255,0.55)';
+  cx.lineWidth = 1.3;
+  cx.beginPath();
+  for (const p of curParticles) {
+    const lat = wLat(p.wy), lon = wLon(p.wx);
+    const u = sampleSea(lat, lon, 0, 'cu'), v = sampleSea(lat, lon, 0, 'cv');
+    p.age++;
+    if (u === null || v === null || p.age > 260 ||
+        p.wx < bx0 || p.wx > bx1 || p.wy < by1 || p.wy > by0) {
+      p.wx = bx0 + Math.random() * (bx1 - bx0);
+      p.wy = by0 + Math.random() * (by1 - by0);
+      p.age = 0;
+      continue;
+    }
+    let dx = u * CUR_SIM_RATE * dt * pxPerM;
+    let dy = -v * CUR_SIM_RATE * dt * pxPerM / Math.cos(lat * Math.PI / 180);
+    const d = Math.hypot(dx, dy);
+    if (d > 5) { dx *= 5 / d; dy *= 5 / d; }
+    const a = toC(p.wx, p.wy);
+    if (Math.hypot(u, v) > 0.02) { cx.moveTo(a.x, a.y); cx.lineTo(a.x + dx, a.y + dy); }
+    p.wx += dx; p.wy += dy;
+  }
+  cx.stroke();
+}
+
+/* ── wave arrows (chevrons toward travel direction, coloured by height) ── */
+function drawWaves(tt) {
+  const W = wC.clientWidth, H = wC.clientHeight;
+  wx.clearRect(0, 0, W, H);
+  if (!ODATA || !$('tgWaves').checked) return;
+  const n = ODATA.grid_n, f = waveFrameAt(tt);
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      const p = r * n + c;
+      const h = ODATA.wh[f] ? ODATA.wh[f][p] : null;
+      if (h === null || h === undefined) continue;
+      const dirFrom = ODATA.wd[f][p];
+      const per = ODATA.wp[f][p];
+      const x = mX(ODATA.lons[c]) - origin.x, y = mY(ODATA.lats[r]) - origin.y;
+      if (x < -20 || x > W + 20 || y < -20 || y > H + 20) continue;
+      const ang = (dirFrom + 180) * Math.PI / 180;   // toward-direction, screen
+      const L = 11 + Math.min(9, h * 3);
+      const [rr, gg, bb] = colorForWave(h);
+      wx.strokeStyle = 'rgba(' + rr + ',' + gg + ',' + bb + ',0.92)';
+      wx.lineWidth = 1.6;
+      wx.beginPath();
+      wx.moveTo(x - Math.sin(ang) * L / 2, y + Math.cos(ang) * L / 2);
+      wx.lineTo(x + Math.sin(ang) * L / 2, y - Math.cos(ang) * L / 2);
+      wx.stroke();
+      /* head chevron */
+      const hx = x + Math.sin(ang) * L / 2, hy = y - Math.cos(ang) * L / 2;
+      wx.beginPath();
+      wx.moveTo(hx - Math.sin(ang + 2.5) * 4, hy + Math.cos(ang + 2.5) * 4);
+      wx.lineTo(hx, hy);
+      wx.lineTo(hx - Math.sin(ang - 2.5) * 4, hy + Math.cos(ang - 2.5) * 4);
+      wx.stroke();
+      if (per !== null && n <= 9) {
+        wx.fillStyle = 'rgba(255,255,255,0.75)';
+        wx.font = '9px system-ui, sans-serif';
+        wx.fillText(h.toFixed(1) + 'm', hx + 4, hy - 3);
+      }
+    }
+  }
+}
+
 /* ── HUD ── */
 function updateHud() {
   if (!DATA) return;
@@ -337,7 +550,27 @@ function updateHud() {
   } else $('hWind').textContent = 'outside grid';
   const tp = sampleField(lat, lng, t, 'temp');
   $('hTemp').textContent = tp === null ? 'outside grid' : tp.toFixed(1) + ' °C';
-  $('hHint').textContent = 'values at cursor · ' + timeLabel(t) + ' (IST)';
+  /* sea readout: SST, current (toward), waves (from) */
+  if (ODATA) {
+    const sstv = sampleSea(lat, lng, 0, 'sst');
+    const cu = sampleSea(lat, lng, 0, 'cu'), cv = sampleSea(lat, lng, 0, 'cv');
+    const wf = waveFrameAt(t);
+    const wh = sampleSea(lat, lng, wf, 'wh'), wd = sampleSea(lat, lng, wf, 'wd');
+    const wp = sampleSea(lat, lng, wf, 'wp');
+    let parts = [];
+    if (sstv !== null) parts.push(sstv.toFixed(1) + ' °C');
+    if (cu !== null && cv !== null) {
+      const sp = Math.hypot(cu, cv);
+      const toward = (Math.atan2(cu, cv) * 180 / Math.PI + 360) % 360;
+      parts.push('cur ' + sp.toFixed(2) + ' m/s ' + COMPASS[Math.round(toward / 22.5) % 16]);
+    }
+    if (wh !== null) {
+      parts.push('waves ' + wh.toFixed(1) + ' m from ' +
+        COMPASS[Math.round(wd / 22.5) % 16] + (wp !== null ? ' · ' + wp.toFixed(0) + ' s' : ''));
+    }
+    $('hSea').textContent = parts.length ? parts.join(' · ') : 'land';
+  } else $('hSea').textContent = '—';
+  $('hHint').textContent = 'values at cursor · ' + timeLabel(t) + ' IST · currents shown 8× speed';
 }
 
 /* ── time ── */
@@ -375,12 +608,22 @@ function refreshTimeLabel() {
 
 /* ── legend ── */
 function buildLegend() {
-  const stops = (DATA.legend && DATA.legend.length) ?
-      DATA.legend.map((s) => [s.value, s.color]) : PALETTE.map((p) => [p[0],
-        'rgb(' + p[1] + ',' + p[2] + ',' + p[3] + ')']);
+  const useSst = $('tgSst') && $('tgSst').checked;
+  let stops;
+  if (useSst) {
+    const lo = SST_PALETTE[0][0], hi = SST_PALETTE[SST_PALETTE.length - 1][0];
+    stops = SST_PALETTE.map((p) =>
+      [((p[0] - lo) / (hi - lo) * 100).toFixed(0),
+       'rgb(' + p[1] + ',' + p[2] + ',' + p[3] + ')']);
+  } else {
+    stops = (DATA && DATA.legend && DATA.legend.length) ?
+        DATA.legend.map((s) => [s.value, s.color]) : PALETTE.map((p) => [p[0],
+          'rgb(' + p[1] + ',' + p[2] + ',' + p[3] + ')']);
+  }
   $('legendgrad').style.background =
       'linear-gradient(90deg,' + stops.map((s) => s[1] + ' ' + s[0] + '%').join(',') + ')';
   $('legendticks').innerHTML = stops.map((s) => '<span>' + s[0] + '</span>').join('');
+  $('legendtitle').textContent = useSst ? 'sea temp °C' : 'humidity %';
 }
 
 /* ── status ── */
@@ -403,8 +646,10 @@ function loop(ts) {
       $('tslider').value = String(Math.round(t * 100));
     }
     drawParticles(dt, t);
+    drawCurParticles(dt);
     if (needsField || Math.abs(t - lastDrawnT) > 0.008) {
       drawField(t); lastDrawnT = t; needsField = false;
+      drawWaves(t);
       refreshTimeLabel();
     }
     updateHud();
@@ -421,7 +666,10 @@ $('tslider').oninput = (e) => { t = parseInt(e.target.value, 10) / 100; };
 map.on('mousemove', (e) => { cursorLL = e.latlng; });
 map.on('mouseout', () => { cursorLL = null; });
 map.on('move zoom', () => { reproj(); needsField = true; });
-map.on('zoomstart', () => { px.clearRect(0, 0, pC.clientWidth, pC.clientHeight); });
+map.on('zoomstart', () => {
+  px.clearRect(0, 0, pC.clientWidth, pC.clientHeight);
+  cx.clearRect(0, 0, cC.clientWidth, cC.clientHeight);
+});
 map.on('moveend', () => {
   reproj(); respawn(); needsField = true;
   if (!DEMO && !loading) {
@@ -429,11 +677,19 @@ map.on('moveend', () => {
     loadGrid._deb = setTimeout(() => loadGrid(true), 900);
   }
 });
-for (const id of ['tgHum', 'tgRef']) $(id).onchange = () => { needsField = true; };
+for (const id of ['tgHum', 'tgRef', 'tgSst']) $(id).onchange = () => {
+  needsField = true; buildLegend();
+};
+$('tgCur').onchange = () => {
+  cx.clearRect(0, 0, cC.clientWidth, cC.clientHeight); curRespawn();
+};
+$('tgWaves').onchange = () => {
+  wx.clearRect(0, 0, wC.clientWidth, wC.clientHeight); needsField = true;
+};
 
 function resize() {
   const dpr = window.devicePixelRatio || 1;
-  for (const cv of [fC, pC]) {
+  for (const cv of [fC, wC, cC, pC]) {
     cv.width = Math.round(cv.clientWidth * dpr);
     cv.height = Math.round(cv.clientHeight * dpr);
     cv.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
