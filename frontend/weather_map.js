@@ -143,13 +143,13 @@ function buildTinies() {
   if (!L) return;
   if (L.src === 'o' && !ODATA) return;      /* sea layer before ocean feed lands */
   const d = L.src === 'o' ? ODATA : DATA;
-  const n = d.grid_n, F = DATA.times.length;
+  const nr = d.lats.length, nc = d.lons.length, F = DATA.times.length;
   for (let f = 0; f < F; f++) {
     const cv = document.createElement('canvas');
-    cv.width = n; cv.height = n;
+    cv.width = nc; cv.height = nr;
     const c2 = cv.getContext('2d');
-    const img = c2.createImageData(n, n);
-    for (let p = 0; p < n * n; p++) {
+    const img = c2.createImageData(nc, nr);
+    for (let p = 0; p < nr * nc; p++) {
       const v = L.get(d, f, p);
       const col = (v === null || v === undefined) ? [0, 0, 0, 0] :
           ((L.cut !== undefined && v < L.cut) ? [0, 0, 0, 0] : palColor(L.pal, v));
@@ -396,7 +396,7 @@ function updateBadge() {
 
 function onData(fitIt) {
   loading = false; hideStatus();
-  const n = DATA.grid_n, F = DATA.times.length;
+  const nr = DATA.lats.length, nc = DATA.lons.length, F = DATA.times.length;
   /* hand the real u/v field to the GPU engine; it refuses fields with
    * missing cells (never turns nulls into calm) — CPU path stays then */
   if (windGPU && windGPU.ok) {
@@ -411,12 +411,12 @@ function onData(fitIt) {
    * afterwards the user owns the view — refetches NEVER re-fit */
   if (fitIt && !onData._booted) {
     onData._booted = true;
-    map.fitBounds([[DATA.lats[n - 1], DATA.lons[0]], [DATA.lats[0], DATA.lons[n - 1]]],
+    map.fitBounds([[DATA.lats[nr - 1], DATA.lons[0]], [DATA.lats[0], DATA.lons[nc - 1]]],
                   {padding: [24, 24]});
   }
   /* dashed coverage box — always shows where the data lives */
-  dataBounds = L.latLngBounds([DATA.lats[n - 1], DATA.lons[0]],
-                               [DATA.lats[0], DATA.lons[n - 1]]);
+  dataBounds = L.latLngBounds([DATA.lats[nr - 1], DATA.lons[0]],
+                               [DATA.lats[0], DATA.lons[nc - 1]]);
   if (coverBox) map.removeLayer(coverBox);
   coverBox = L.rectangle(dataBounds, {color: '#fff', weight: 1, opacity: 0.55,
                                       dashArray: '4 6', fill: false,
@@ -427,11 +427,12 @@ function onData(fitIt) {
 
 /* ── sampling (bilinear in geo space, frames lerped) ── */
 function sampleField(lat, lon, tt, key) {
-  const n = DATA.grid_n, lats = DATA.lats, lons = DATA.lons;
-  if (lat > lats[0] || lat < lats[n - 1] || lon < lons[0] || lon > lons[n - 1]) return null;
+  const nr = DATA.lats.length, nc = DATA.lons.length;
+  const lats = DATA.lats, lons = DATA.lons;
+  if (lat > lats[0] || lat < lats[nr - 1] || lon < lons[0] || lon > lons[nc - 1]) return null;
   let r = 0, c = 0;
-  while (r < n - 2 && lat < lats[r + 1]) r++;
-  while (c < n - 2 && lon > lons[c + 1]) c++;
+  while (r < nr - 2 && lat < lats[r + 1]) r++;
+  while (c < nc - 2 && lon > lons[c + 1]) c++;
   const fr = (lats[r] - lat) / (lats[r] - lats[r + 1]);
   const fc = (lon - lons[c]) / (lons[c + 1] - lons[c]);
   /* clamp the frame pair — t must never index outside the data (a
@@ -440,8 +441,8 @@ function sampleField(lat, lon, tt, key) {
   const fB = Math.min(fA + 1, DATA.times.length - 1);
   const g = (f) => {
     const arr = DATA[key][f];
-    const i00 = arr[r * n + c], i10 = arr[r * n + c + 1];
-    const i01 = arr[(r + 1) * n + c], i11 = arr[(r + 1) * n + c + 1];
+    const i00 = arr[r * nc + c], i10 = arr[r * nc + c + 1];
+    const i01 = arr[(r + 1) * nc + c], i11 = arr[(r + 1) * nc + c + 1];
     if (i00 === null || i10 === null || i01 === null || i11 === null) return null;
     return (i00 * (1 - fc) + i10 * fc) * (1 - fr) + (i01 * (1 - fc) + i11 * fc) * fr;
   };
@@ -459,17 +460,18 @@ function sampleWind(lat, lon, tt) {
 /* ── sea sampling (lattice of ODATA; daily fields constant, waves hourly) ── */
 function sampleSea(lat, lon, frame, key) {
   if (!ODATA) return null;
-  const n = ODATA.grid_n, lats = ODATA.lats, lons = ODATA.lons;
-  if (lat > lats[0] || lat < lats[n - 1] || lon < lons[0] || lon > lons[n - 1]) return null;
+  const nr = ODATA.lats.length, nc = ODATA.lons.length;
+  const lats = ODATA.lats, lons = ODATA.lons;
+  if (lat > lats[0] || lat < lats[nr - 1] || lon < lons[0] || lon > lons[nc - 1]) return null;
   let r = 0, c = 0;
-  while (r < n - 2 && lat < lats[r + 1]) r++;
-  while (c < n - 2 && lon > lons[c + 1]) c++;
+  while (r < nr - 2 && lat < lats[r + 1]) r++;
+  while (c < nc - 2 && lon > lons[c + 1]) c++;
   const fr = (lats[r] - lat) / (lats[r] - lats[r + 1]);
   const fc = (lon - lons[c]) / (lons[c + 1] - lons[c]);
   const arr = (key === 'cu' || key === 'cv' || key === 'sst') ? ODATA[key] : ODATA[key][frame];
   if (!arr) return null;
-  const i00 = arr[r * n + c], i10 = arr[r * n + c + 1];
-  const i01 = arr[(r + 1) * n + c], i11 = arr[(r + 1) * n + c + 1];
+  const i00 = arr[r * nc + c], i10 = arr[r * nc + c + 1];
+  const i01 = arr[(r + 1) * nc + c], i11 = arr[(r + 1) * nc + c + 1];
   if (i00 === null || i10 === null || i01 === null || i11 === null) return null;
   return (i00 * (1 - fc) + i10 * fc) * (1 - fr) + (i01 * (1 - fc) + i11 * fc) * fr;
 }
@@ -491,11 +493,11 @@ function drawField(tt) {
   const W = fC.clientWidth, H = fC.clientHeight;
   fx.clearRect(0, 0, W, H);
   if (!DATA) return;
-  const n = DATA.grid_n, F = DATA.times.length;
+  const nr = DATA.lats.length, nc = DATA.lons.length, F = DATA.times.length;
   const p0 = toC(mX(DATA.lons[0]), mY(DATA.lats[0]));
-  const p1 = toC(mX(DATA.lons[n - 1]), mY(DATA.lats[n - 1]));
+  const p1 = toC(mX(DATA.lons[nc - 1]), mY(DATA.lats[nr - 1]));
   const wpx = p1.x - p0.x, hpx = p1.y - p0.y;
-  const cellX = wpx / (n - 1), cellY = hpx / (n - 1);
+  const cellX = wpx / (nc - 1), cellY = hpx / (nr - 1);
   const rect = [p0.x - cellX / 2, p0.y - cellY / 2, wpx + cellX, hpx + cellY];
 
   if (tinies.length) {                     /* active-layer wash (picker) */
@@ -551,10 +553,10 @@ function drawRef(p0, p1) {
 
 /* ── wind particles ── */
 function gpuView() {
-  const n = DATA.grid_n;
+  const nc = DATA.lons.length, nr = DATA.lats.length;
   return {
     gx0: mX(DATA.lons[0]), gy0: mY(DATA.lats[0]),
-    gx1: mX(DATA.lons[n - 1]), gy1: mY(DATA.lats[n - 1]),
+    gx1: mX(DATA.lons[nc - 1]), gy1: mY(DATA.lats[nr - 1]),
     originX: origin.x, originY: origin.y,
     pxPerM: scale / 40075016.686,
     N: 256 * Math.pow(2, map.getZoom()),
@@ -564,9 +566,9 @@ function gpuView() {
 }
 function respawn() {
   if (!DATA) { particles = []; return; }
-  const n = DATA.grid_n;
-  const bx0 = mX(DATA.lons[0]), bx1 = mX(DATA.lons[n - 1]);
-  const by0 = mY(DATA.lats[0]), by1 = mY(DATA.lats[n - 1]);
+  const nc = DATA.lons.length, nr = DATA.lats.length;
+  const bx0 = mX(DATA.lons[0]), bx1 = mX(DATA.lons[nc - 1]);
+  const by0 = mY(DATA.lats[0]), by1 = mY(DATA.lats[nr - 1]);
   /* density: ~1 particle per 170 px² of grid box (scaled by zoom),
    * bounded so tiny boxes never get overcrowded */
   let count = Math.round((bx1 - bx0) * (by1 - by0) / 170 /
@@ -591,9 +593,9 @@ function drawParticles(dt, tt) {
   px.globalCompositeOperation = 'source-over';
   if (!DATA || !$('tgWind').checked) return;
 
-  const n = DATA.grid_n;
-  const bx0 = mX(DATA.lons[0]), bx1 = mX(DATA.lons[n - 1]);
-  const by0 = mY(DATA.lats[0]), by1 = mY(DATA.lats[n - 1]);
+  const nc = DATA.lons.length, nr = DATA.lats.length;
+  const bx0 = mX(DATA.lons[0]), bx1 = mX(DATA.lons[nc - 1]);
+  const by0 = mY(DATA.lats[0]), by1 = mY(DATA.lats[nr - 1]);
   const pxPerM = scale / 40075016.686;
   px.strokeStyle = 'rgba(255,255,255,0.62)';
   px.lineWidth = 1.35;
@@ -625,9 +627,9 @@ function drawParticles(dt, tt) {
 function curRespawn() {
   curParticles = [];
   if (!ODATA) return;
-  const n = ODATA.grid_n;
-  const bx0 = mX(ODATA.lons[0]), bx1 = mX(ODATA.lons[n - 1]);
-  const by0 = mY(ODATA.lats[0]), by1 = mY(ODATA.lats[n - 1]);
+  const nc = ODATA.lons.length, nr = ODATA.lats.length;
+  const bx0 = mX(ODATA.lons[0]), bx1 = mX(ODATA.lons[nc - 1]);
+  const by0 = mY(ODATA.lats[0]), by1 = mY(ODATA.lats[nr - 1]);
   const count = Math.max(200, Math.min(1200,
       Math.round((bx1 - bx0) * (by1 - by0) / 700)));
   for (let i = 0; i < count; i++) {
@@ -643,9 +645,9 @@ function drawCurParticles(dt) {
   cx.fillRect(0, 0, W, H);
   cx.globalCompositeOperation = 'source-over';
   if (!ODATA || !$('tgCur').checked) return;
-  const n = ODATA.grid_n;
-  const bx0 = mX(ODATA.lons[0]), bx1 = mX(ODATA.lons[n - 1]);
-  const by0 = mY(ODATA.lats[0]), by1 = mY(ODATA.lats[n - 1]);
+  const nc = ODATA.lons.length, nr = ODATA.lats.length;
+  const bx0 = mX(ODATA.lons[0]), bx1 = mX(ODATA.lons[nc - 1]);
+  const by0 = mY(ODATA.lats[0]), by1 = mY(ODATA.lats[nr - 1]);
   const pxPerM = scale / 40075016.686;
   cx.strokeStyle = 'rgba(0,229,255,0.65)';
   cx.lineWidth = 1.45;
@@ -677,10 +679,10 @@ function drawWaves(tt) {
   const W = wC.clientWidth, H = wC.clientHeight;
   wx.clearRect(0, 0, W, H);
   if (!ODATA || !$('tgWaves').checked) return;
-  const n = ODATA.grid_n, f = waveFrameAt(tt);
-  for (let r = 0; r < n; r++) {
-    for (let c = 0; c < n; c++) {
-      const p = r * n + c;
+  const nr = ODATA.lats.length, nc = ODATA.lons.length, f = waveFrameAt(tt);
+  for (let r = 0; r < nr; r++) {
+    for (let c = 0; c < nc; c++) {
+      const p = r * nc + c;
       const h = ODATA.wh[f] ? ODATA.wh[f][p] : null;
       if (h === null || h === undefined) continue;
       const dirFrom = ODATA.wd[f][p];
@@ -913,7 +915,7 @@ map.on('moveend', () => {
     if (!map.getBounds().intersects(dataBounds)) {
       if (!demoNagged) {
         demoNagged = true;
-        showStatus('offline demo grid covers the dashed box (12° around Kutch / Arabian Sea) · tap ⌖ to jump back', true);
+        showStatus('offline demo grid covers the dashed box (Arabian Sea → Gujarat, 26–18°N · 62–77°E) · tap ⌖ to jump back', true);
       }
     } else if (demoNagged) {
       demoNagged = false;

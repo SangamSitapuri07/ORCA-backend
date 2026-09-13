@@ -129,18 +129,19 @@ def test_params_are_clamped():
 # ── bundled demo snapshot (REAL ICON output — integrity, not mocks) ──
 
 def test_demo_snapshot_shapes_and_ranges():
-    assert len(_S) == len(_D) == len(_RH) == len(_T) == 81
-    assert len(_PR) == len(_G) == len(_CL) == 81
+    assert len(_S) == len(_D) == len(_RH) == len(_T) == 117
+    assert len(_PR) == len(_G) == len(_CL) == 117
     assert all(len(a) == 8 for a in _S + _D + _RH + _T + _PR + _G + _CL)
     assert TIMES[0] == "2026-09-13T18:00" and TIMES[-1] == "2026-09-14T01:00"
     assert all(0 <= x <= 40 for a in _S for x in a)
     assert all(0 <= x <= 360 for a in _D for x in a)
     assert all(10 <= x <= 100 for a in _RH for x in a)
     assert all(20 <= x <= 40 for a in _T for x in a)
-    # relayed verbatim 2026-09-13 18:50 UTC: evening convective rain,
-    # gusts > speeds, near-total cloud cover; RH dips to 13 over the
-    # Thar desert (28.2N 63.4E) while the Arabian Sea stays 80+
-    assert all(0 <= x <= 10 for a in _PR for x in a)
+    # relayed verbatim 2026-09-13 19:15 UTC: evening convective rain
+    # (two Gulf of Khambhat cells), gusts > speeds, near-total cloud
+    # cover over the eastern half; RH dips to 45 over land while the
+    # Arabian Sea stays 80+
+    assert all(0 <= x <= 20 for a in _PR for x in a)
     assert all(2 <= x <= 45 for a in _G for x in a)
     assert all(0 <= x <= 100 for a in _CL for x in a)
     assert any(x >= 5.0 for a in _PR for x in a)          # real convective cell
@@ -150,34 +151,37 @@ def test_demo_snapshot_shapes_and_ranges():
 def test_demo_payload_contract():
     d = demo_payload()
     assert d["demo"] is True and d["fetched_at"].startswith("2026-09-13")
-    assert len(d["times"]) == 8 and len(d["u"]) == 8 and len(d["u"][0]) == 81
-    assert len(d["lats"]) == len(d["lons"]) == 9     # row/col vectors, not per-point
-    assert d["lats"][0] == 28.2 and d["lons"][0] == 63.4
+    assert len(d["times"]) == 8 and len(d["u"]) == 8 and len(d["u"][0]) == 117
+    assert len(d["lats"]) == 9 and len(d["lons"]) == 13   # row/col vectors, not per-point
+    assert d["lats"][0] == 26.2 and d["lons"][0] == 62.2 and d["lons"][12] == 76.6
+    assert d["grid_rows"] == 9 and d["grid_cols"] == 13
+    assert d["step_lat"] == 1.0 and d["step_lon"] == 1.2
     # u/v round-trip: speed & FROM-direction recover exactly
     spd = math.hypot(d["u"][0][0], d["v"][0][0]) * 3.6
     dr = (270 - math.degrees(math.atan2(d["v"][0][0], d["u"][0][0]))) % 360
     assert abs(spd - _S[0][0]) < 0.05 and abs(dr - _D[0][0]) < 1.0
     # new picker fields, transposed [frame][point] like u/v/rh/temp
     for k, raw in (("pr", _PR), ("gust", _G), ("cloud", _CL)):
-        assert len(d[k]) == 8 and len(d[k][0]) == 81
+        assert len(d[k]) == 8 and len(d[k][0]) == 117
         assert d[k][3][40] == raw[40][3]
-    assert d["pr"][7][32] == 8.5 and d["gust"][0][0] == 12.6 and d["cloud"][7][8] == 99
+    assert d["pr"][6][74] == 19.4 and d["gust"][0][0] == 14 and d["cloud"][7][8] == 100
 
 
 def test_demo_snapshot_convection_signature():
     """Fingerprint of the REAL 18:00->01:00 UTC 2026-09-13 relay: rain
-    already active at frame 0 (6 mm/h over Saurashtra), the evening
-    peak 8.5 mm/h at 23.7N 70.9E, and the peak cell east of 69.75E —
-    fabricated or shuffled data would not reproduce this."""
-    frame_peak = [max(_PR[p][h] for p in range(81)) for h in range(8)]
+    already active at frame 0 (8.2 mm/h over the Saurashtra coast), the
+    evening peak 19.4 mm/h at 21.2N 72.9E (Gulf of Khambhat) at 00:00
+    UTC, and the peak cell east of 72E — fabricated or shuffled data
+    would not reproduce this."""
+    frame_peak = [max(_PR[p][h] for p in range(117)) for h in range(8)]
     assert frame_peak[0] >= 1.5                     # 18:00: active coast cell
     assert max(frame_peak[5:]) >= 6.0               # 23:00-01:00 convective max
-    peak = max((x, p, h) for p in range(81) for h in range(8) for x in [_PR[p][h]])
-    assert peak[0] == 8.5 and peak[2] == 7 and peak[1] % 9 >= 5  # 23.7N 70.9E, 01:00
+    peak = max((x, p, h) for p in range(117) for h in range(8) for x in [_PR[p][h]])
+    assert peak[0] == 19.4 and peak[2] == 6 and peak[1] % 13 >= 9  # 21.2N 72.9E, 00:00
     # wind and rain tell the same story: the rainy east is calm, the dry
     # west is windy (monsoon westerlies) — a coherent field, not noise
-    west_speed = sum(_S[p][6] for p in range(81) if p % 9 <= 3) / 36
-    east_speed = sum(_S[p][6] for p in range(81) if p % 9 >= 5) / 36
+    west_speed = sum(_S[p][6] for p in range(117) if p % 13 <= 5) / 54
+    east_speed = sum(_S[p][6] for p in range(117) if p % 13 >= 9) / 36
     assert west_speed > east_speed
 
 
@@ -188,12 +192,12 @@ def test_endpoint_demo_and_page():
         r = c.get("/api/v1/weather/grid?demo=1")
         assert r.status_code == 200
         j = r.json()
-        assert j["demo"] is True and len(j["times"]) == 8 and len(j["u"][0]) == 81
+        assert j["demo"] is True and len(j["times"]) == 8 and len(j["u"][0]) == 117
         assert c.get("/api/v1/weather/grid").status_code == 422  # coords required
         p = c.get("/map")
         assert p.status_code == 200 and "ORCA Live Weather Map" in p.text
         for k in ("pr", "gust", "cloud"):
-            assert len(j[k]) == 8 and len(j[k][0]) == 81, k
+            assert len(j[k]) == 8 and len(j[k][0]) == 117, k
         assert "layers" in p.text and 'data-lyr="rain"' in p.text
         assert 'data-lyr="gust"' in p.text and 'data-lyr="cur"' in p.text
         assert "hGust" in p.text and "hRain" in p.text

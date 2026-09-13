@@ -337,18 +337,19 @@ class WindGPU {
    * path has no null representation and must never turn missing into 0. */
   setField(DATA) {
     try {
-      const gl = this.gl, n = DATA.grid_n, F = DATA.times.length;
+      const gl = this.gl, nr = DATA.lats.length, nc = DATA.lons.length,
+            F = DATA.times.length;
       const check = (arr) => { for (let i = 0; i < arr.length; i++) if (arr[i] === null || arr[i] === undefined || !isFinite(arr[i])) return false; return true; };
       for (let f = 0; f < F; f++)
         if (!check(DATA.u[f]) || !check(DATA.v[f])) return false;
 
       for (const w of this._windTex) { gl.deleteTexture(w); }
       this._windTex = [];
-      const buf = new Uint8Array(n * n * 4);
+      const buf = new Uint8Array(nc * nr * 4);
       for (let f = 0; f < F; f++) {
-        for (let r = 0; r < n; r++)          /* r: 0 = NORTH row (lats[0]) */
-          for (let c = 0; c < n; c++) {
-            const i = (r * n + c) * 4, g = r * n + c;
+        for (let r = 0; r < nr; r++)         /* r: 0 = NORTH row (lats[0]) */
+          for (let c = 0; c < nc; c++) {
+            const i = (r * nc + c) * 4, g = r * nc + c;
             const eu = Math.max(0, Math.min(65535,
                           Math.round((DATA.u[f][g] + 80) / WIND_ENC_RANGE * 65535)));
             const ev = Math.max(0, Math.min(65535,
@@ -358,12 +359,12 @@ class WindGPU {
           }
         const t = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, t);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, n, n, 0, gl.RGBA,
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, nc, nr, 0, gl.RGBA,
                       gl.UNSIGNED_BYTE, buf);
         this._texParams(t);
         this._windTex.push(t);
       }
-      this._gridN = n;
+      this._gridCols = nc; this._gridRows = nr;
       this.hasField = true;
       return true;
     } catch (e) {
