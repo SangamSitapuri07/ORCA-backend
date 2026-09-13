@@ -550,6 +550,31 @@ def get_field(
         raise HTTPException(status_code=500, detail=f"field fetch failed: {type(e).__name__}: {e}\n{traceback.format_exc()}")
 
 
+# ── Humidity map field (zoom.earth-style RH layer, ICON via Open-Meteo) ──
+
+@app.get("/api/v1/humidity")
+def get_humidity(
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+    span: float = Query(3.0, gt=0.0, le=30.0),
+    hours: int = Query(0, ge=0, le=48),
+) -> dict[str, Any]:
+    """Relative-humidity map grid (2 m AGL) from the DWD ICON model via
+    Open-Meteo — the same model zoom.earth's humidity map displays,
+    rebuilt first-party (zoom.earth has no public tile API). Returns an
+    n×9 grid of RH/temp/dew-point + a ready-to-draw legend. Cached 30 min
+    per 0.1° centre + span + forecast hour."""
+    from pipeline.humidity import get_humidity_field
+    try:
+        return _with_deadline(
+            lambda: get_humidity_field(lat, lon, span, hours), 45, "humidity",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"humidity fetch failed: {type(e).__name__}: {e}")
+
+
 # ── OSM tile proxy: real map tiles for the 3D ocean surface ────────
 #
 # The 3D view drapes REAL OpenStreetMap tiles onto its animated surface
