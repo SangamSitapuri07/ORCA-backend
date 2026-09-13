@@ -1,215 +1,197 @@
-# Safe Departure Window — status check + drop-in implementation for `prabhbani/ORCA-SIH-2026`
+# Safe Departure Window — v2 (aligned to the SIH-2026 threshold spec) for `prabhbani/ORCA-SIH-2026`
 
-> Checked 13 Sep 2026 against clone `a7af561`. Question: is the Safe
-> Departure Window Calculator for `/api/v1/advisory` still pending, and
-> how should it be built?
+> v1 (commit `4d7363a`) was checked against the final spec and **core
+> logic matched, but 4 changes were needed**. This v2 implements them
+> and is tested — 10/10 synthetic cases pass (§4).
 
-## 1. Status: YES, pending — and the inputs are already there
+## 1. Status: still pending in that repo — inputs already there
 
-**Pending (the gap):**
-- `backend/routes_v1.py` line 196: `"safe_window": None` — **hardcoded**,
-  never computed. The advisory response always ships a null window.
-- No window algorithm exists anywhere in the repo.
-  `agents_engine.py` only does a worst-case fold of the **current**
-  values for the verdict — nothing looks at the future series.
-- The `hourly_chart` slices `[:24]` and ignores the gust series.
+- `backend/routes_v1.py:196` — `"safe_window": None` hardcoded; no
+  window algorithm anywhere; `hourly_chart` ignores gusts and slices 24 h.
+- `snap["hourly_forecast"]` already carries 72 h of `time`,
+  `wave_height_m`, `wind_speed_kn`, `wind_gust_kn` (UTC, knots).
+  Zero new API calls needed.
 
-**Already working (the inputs):**
-- `backend/data_providers.py` fetches **72 h** of hourly series
-  (`forecast_days: 3`, UTC) from Open-Meteo and stores them in
-  `snap["hourly_forecast"]`:
-  - `time` — ISO UTC hourly timestamps (from the forecast API)
-  - `wave_height_m` — from the **marine** API hourly `wave_height`
-  - `wind_speed_kn` — hourly `wind_speed_10m` (already in knots)
-  - `wind_gust_kn` — hourly `wind_gusts_10m` (already in knots)
+## 2. v1 → v2: what matched, what changed
 
-So this is purely a computation + wiring task: **zero new API calls**,
-zero credentials, zero new dependencies.
+**Already matched in v1 (unchanged):**
+- contiguous-run scanning, ≥ 3 h minimum window
+- earliest window preference → covers both "currently safe → how long
+  it lasts" and "currently unsafe → next window start time"
+- peak wave/wind metrics, honest not-found, fail-safe on missing values,
+  misaligned marine/wind series trimming, no network calls, one-line wiring
 
-## 2. Drop-in implementation (tested — 9/9 synthetic cases pass)
+**Changed for v2 (the 4 deltas):**
 
-### 2a. New file `backend/safe_window.py`
+| # | Spec requirement | v1 had | v2 does |
+|---|---|---|---|
+| 1 | Three tiers — GOOD 2.0 m / 15 kn / 25 kn, CAUTION 2.5 m / 20 kn / 34 kn, NO-GO at/above | single safe set (2.5 / 20 / 34) | every hour classified GOOD/CAUTION/NO-GO; window quality GOOD only if **all** hours GOOD; `status: AVAILABLE` vs `CAUTION` |
+| 2 | Trilingual EN / HI / **TE** | EN + HI only | `recommendation_te` added (that backend is already trilingual — `headline_te` exists) |
+| 3 | Output shape `status/start_time/end_time/duration_hours/max_wave_m/max_wind_kn/recommendation_en|hi|te`, timestamps like `2026-09-13T06:00:00Z` | `found/from_utc/to_utc/hours/evidence.*` | exact spec field names; `end_time = start + duration` (exclusive, matches the 06:00→16:00 = 10 h example); extra fields (`max_gust_kn`, `window_quality`, `currently_safe`, `thresholds`, `note`) are clearly additive — drop if unwanted |
+| 4 | Evaluate the 24–48 h series; tests live in `test_routes_and_forecast.py` | scanned 72 h; separate test file | default horizon 48 h (parameterized; provider already supplies 72 h); test cases below drop straight into `test_routes_and_forecast.py` |
 
-Pure function over the existing `hourly_forecast` dict. Thresholds per
-the task spec (waves < 2.5 m, sustained wind < 20 kn, gusts < 34 kn —
-34 kn is the gale/small-craft warning onset; ORCA-backend's own
-`pipeline/forecast.py::find_safe_window` uses 30 kn — both are
-defensible, keep them as constants). Missing values never certify
-safety (fail-safe). The code below is exactly what passed the tests in
-§3.
+## 3. Drop-in `backend/safe_window.py` (v2, tested)
 
 ```python
-"""Safe Departure Window Calculator — pure function over the live
-Open-Meteo hourly series (time, wave_height_m, wind_speed_kn, wind_gust_kn).
-No network calls; missing values never certify safety (fail-safe)."""
+"""Safe Departure Window Calculator v2 — ORCA safety-threshold spec.
+
+Three-tier hour classification:
+  GOOD     wave < 2.0 m, sustained wind < 15 kn, gust < 25 kn
+  CAUTION  wave < 2.5 m, sustained wind < 20 kn, gust < 34 kn
+  NO-GO    any value at/above the CAUTION limits (or missing — fail-safe)
+A departure window = contiguous non-NO-GO hours (>= MIN_HOURS, default 3);
+quality GOOD only if EVERY hour is GOOD. Pure function — no network calls.
+"""
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-WAVE_MAX_M = 2.5      # small-craft wave caution level (INCOIS bulletin practice)
-WIND_MAX_KN = 20.0    # ~Beaufort 5 sustained — workable but tiring
-GUST_MAX_KN = 34.0    # gale onset / small-craft warning level
-MIN_HOURS = 3         # a usable fishing round needs >= 3 contiguous safe hours
-HORIZON_HOURS = 72    # provider fetches forecast_days=3
+GOOD = {"wave_m": 2.0, "wind_kn": 15.0, "gust_kn": 25.0}
+CAUTION = {"wave_m": 2.5, "wind_kn": 20.0, "gust_kn": 34.0}
+MIN_HOURS = 3
+HORIZON_HOURS = 48          # spec: evaluate the 24-48 h series
 IST_OFFSET = timedelta(hours=5, minutes=30)
 
 
-def _fmt_ist(iso_utc: str) -> str:
-    try:
-        t = datetime.fromisoformat(iso_utc).replace(tzinfo=timezone.utc)
-        return (t + IST_OFFSET).strftime("%I:%M %p IST").lstrip("0")
-    except ValueError:
-        return iso_utc
-
-
-def _hour_ok(w, wd, g) -> bool:
+def _classify(w, wd, g) -> str:
     if w is None or wd is None or g is None:
-        return False          # cannot certify safety without evidence
-    return w < WAVE_MAX_M and wd < WIND_MAX_KN and g < GUST_MAX_KN
+        return "NO-GO"      # cannot certify safety without evidence
+    if w < GOOD["wave_m"] and wd < GOOD["wind_kn"] and g < GOOD["gust_kn"]:
+        return "GOOD"
+    if w < CAUTION["wave_m"] and wd < CAUTION["wind_kn"] and g < CAUTION["gust_kn"]:
+        return "CAUTION"
+    return "NO-GO"
 
 
-def find_safe_departure_window(hourly: Dict[str, Any]) -> Dict[str, Any]:
+def _iso_z(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _ist12(dt_utc: datetime) -> str:
+    return (dt_utc + IST_OFFSET).strftime("%I:%M %p").lstrip("0")
+
+
+def find_safe_departure_window(hourly: Dict[str, Any],
+                               min_hours: int = MIN_HOURS,
+                               horizon_hours: int = HORIZON_HOURS) -> Dict[str, Any]:
     times: List[str] = hourly.get("time") or []
     waves: List[Optional[float]] = hourly.get("wave_height_m") or []
     winds: List[Optional[float]] = hourly.get("wind_speed_kn") or []
     gusts: List[Optional[float]] = hourly.get("wind_gust_kn") or []
-    # wave series comes from the marine API, wind from the forecast API —
-    # trim to the common length so indices always line up
+    # waves come from the marine API, winds from the forecast API — trim to common length
     n = min(len(times), len(waves), len(winds), len(gusts))
-    thresholds = {"wave_max_m": WAVE_MAX_M, "wind_max_kn": WIND_MAX_KN,
-                  "gust_max_kn": GUST_MAX_KN, "min_hours": MIN_HOURS}
     if n == 0:
-        return {"found": False, "note": "No hourly forecast series available.",
-                "thresholds": thresholds}
+        return {"status": "UNAVAILABLE",
+                "note": "No hourly forecast series available.",
+                "recommendation_en": "Departure window unknown — no forecast timeline.",
+                "recommendation_hi": "पूर्वानुमान उपलब्ध नहीं है, प्रस्थान समय अज्ञात है।",
+                "recommendation_te": "సూచన లేనందున బయలుదేరే సమయం తెలియదు."}
 
     now_key = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:00")
-    start = 0
-    for i in range(n):
-        if times[i] >= now_key:
-            start = i
-            break
-    else:
-        return {"found": False, "note": "Forecast series is entirely in the past.",
-                "thresholds": thresholds}
-    end = min(n, start + HORIZON_HOURS)
+    start = next((i for i in range(n) if times[i] >= now_key), None)
+    if start is None:
+        return {"status": "UNAVAILABLE",
+                "note": "Forecast series is entirely in the past.",
+                "recommendation_en": "Departure window unknown — forecast series expired.",
+                "recommendation_hi": "पूर्वानुमान समाप्त हो गया है, प्रस्थान समय अज्ञात है।",
+                "recommendation_te": "సూచన గడువు ముగింది, బయలుదేరే సమయం తెలియదు."}
+    end = min(n, start + horizon_hours)
 
-    runs = []
-    run_start = None
-    for k in range(start, end):
-        if _hour_ok(waves[k], winds[k], gusts[k]):
+    classes = [_classify(waves[k], winds[k], gusts[k]) for k in range(start, end)]
+    currently_safe = classes[0] != "NO-GO"
+
+    runs, run_start = [], None
+    for idx, c in enumerate(classes + ["NO-GO"]):     # sentinel closes a trailing run
+        if c != "NO-GO":
             if run_start is None:
-                run_start = k
+                run_start = idx
         elif run_start is not None:
-            runs.append((run_start, k))
+            runs.append((run_start, idx))
             run_start = None
-    if run_start is not None:
-        runs.append((run_start, end))
-    runs = [(a, b) for (a, b) in runs if (b - a) >= MIN_HOURS]
+    runs = [(a, b) for (a, b) in runs if (b - a) >= min_hours]
 
     if not runs:
-        return {"found": False,
-                "note": f"No {MIN_HOURS}h+ departure window within limits "
-                        f"in the next {HORIZON_HOURS}h.",
-                "thresholds": thresholds}
+        return {"status": "UNAVAILABLE",
+                "note": f"No {min_hours}h+ departure window within safety limits "
+                        f"in the next {horizon_hours}h.",
+                "currently_safe": currently_safe,
+                "recommendation_en": f"No safe departure window in the next {horizon_hours} hours — sea conditions exceed safety limits.",
+                "recommendation_hi": f"अगले {horizon_hours} घंटों में प्रस्थान के लिए कोई सुरक्षित समय नहीं है।",
+                "recommendation_te": f"తరువాతి {horizon_hours} గంటల్లో బయలుదేరడానికి సురక్షిత సమయం లేదు.",
+                "thresholds": {"good": GOOD, "caution": CAUTION, "min_hours": min_hours}}
 
-    a, b = runs[0]                       # earliest window = what a fisher asks for
-    worst_wave = max(waves[a:b])
-    worst_wind = max(winds[a:b])
-    worst_gust = max(gusts[a:b])
+    a, b = runs[0]                # earliest qualifying window (covers both cases:
+                                  # currently safe -> starts now; unsafe -> next window)
+    quality = "GOOD" if all(classes[i] == "GOOD" for i in range(a, b)) else "CAUTION"
 
-    reason = None
-    next_change_utc = None
-    if b < end:
-        next_change_utc = times[b]
-        if waves[b] is not None and waves[b] >= WAVE_MAX_M:
-            reason = f"waves build to {waves[b]:.1f} m"
-        elif gusts[b] is not None and gusts[b] >= GUST_MAX_KN:
-            reason = f"gusts reach {gusts[b]:.0f} kn"
-        elif winds[b] is not None and winds[b] >= WIND_MAX_KN:
-            reason = f"sustained wind hits {winds[b]:.0f} kn"
-        else:
-            reason = "a data gap (values unavailable)"
-        caution = f"Caution after {_fmt_ist(times[b])} — {reason}."
+    max_wave = max(waves[start + a: start + b])
+    max_wind = max(winds[start + a: start + b])
+    max_gust = max(gusts[start + a: start + b])
+
+    start_dt = datetime.fromisoformat(times[start + a]).replace(tzinfo=timezone.utc)
+    duration = b - a
+    end_dt = start_dt + timedelta(hours=duration)     # exclusive end
+
+    s_local, e_local = _ist12(start_dt), _ist12(end_dt)
+    if quality == "GOOD":
+        recommendation_en = (f"Optimal departure window between {s_local} and {e_local} "
+                             f"(max wave {max_wave:.1f} m, max wind {max_wind:.0f} kn).")
+        recommendation_hi = f"{s_local} से {e_local} के बीच प्रस्थान के लिए सर्वोत्तम समय।"
+        recommendation_te = f"{s_local} నుండి {e_local} వరకు బయలుదేరడానికి అనుకూలమైన సమయం."
     else:
-        caution = "Window extends to the end of the forecast horizon."
+        recommendation_en = (f"Marginal departure window between {s_local} and {e_local} "
+                             f"(max wave {max_wave:.1f} m, max wind {max_wind:.0f} kn) — "
+                             f"conditions within caution limits; small craft exercise care.")
+        recommendation_hi = f"{s_local} से {e_local} तक सीमांत समय है — छोटी नावों को सावधानी बरतनी चाहिए।"
+        recommendation_te = f"{s_local} నుండి {e_local} వరకు జాగ్రత్తతో బయలుదేరండి — చిన్న పడవలు జాగ్రత్త వహించాలి."
 
     return {
-        "found": True,
-        "from_utc": times[a] + "Z",
-        "to_utc": times[b - 1] + "Z",
-        "hours": b - a,
-        "headline_en": (f"Safe to depart between {_fmt_ist(times[a])} and "
-                        f"{_fmt_ist(times[b - 1])}. {caution}"),
-        "headline_hi": (f"{_fmt_ist(times[a])} से {_fmt_ist(times[b - 1])} तक निकलना "
-                        f"सुरक्षित है। {caution}"),
-        "evidence": {
-            "worst_wave_m": worst_wave, "worst_wind_kn": worst_wind,
-            "worst_gust_kn": worst_gust, "next_change_utc": next_change_utc,
-            "reason_after": reason, "windows_found": len(runs),
-        },
-        "thresholds": thresholds,
+        "status": "AVAILABLE" if quality == "GOOD" else "CAUTION",
+        "start_time": _iso_z(start_dt),
+        "end_time": _iso_z(end_dt),
+        "duration_hours": duration,
+        "max_wave_m": round(max_wave, 2),
+        "max_wind_kn": round(max_wind, 1),
+        "max_gust_kn": round(max_gust, 1),            # extra beyond spec — drop if unwanted
+        "window_quality": quality,                    # extra beyond spec
+        "currently_safe": currently_safe,             # extra beyond spec
+        "recommendation_en": recommendation_en,
+        "recommendation_hi": recommendation_hi,
+        "recommendation_te": recommendation_te,
+        "thresholds": {"good": GOOD, "caution": CAUTION, "min_hours": min_hours},
     }
 ```
 
-### 2b. Wire it in `backend/routes_v1.py` — one line
+Wiring is unchanged — in `routes_v1.py`:
 
 ```python
-from safe_window import find_safe_departure_window   # top of file
-
-# in get_advisory(), replace:
-        "safe_window": None,
-# with:
+from safe_window import find_safe_departure_window
+# replace  "safe_window": None,  with:
         "safe_window": find_safe_departure_window(snap.get("hourly_forecast", {})),
 ```
 
-Keep the existing `safe_window` key (the app already receives it); if
-the frontend expects the spec's name, add
-`"safe_departure_window": <same object>` as an alias.
+## 4. Tests (drop into `backend/test_routes_and_forecast.py`) — 10/10 pass
 
-### 2c. Example response
-
-```json
-"safe_window": {
-  "found": true,
-  "from_utc": "2026-09-13T05:00Z",
-  "to_utc": "2026-09-13T13:00Z",
-  "hours": 9,
-  "headline_en": "Safe to depart between 10:30 AM IST and 6:30 PM IST. Caution after 7:30 PM IST — gusts reach 36 kn.",
-  "headline_hi": "10:30 AM IST से 6:30 PM IST तक निकलना सुरक्षित है। Caution after 7:30 PM IST — gusts reach 36 kn.",
-  "evidence": {"worst_wave_m": 1.0, "worst_wind_kn": 10.0, "worst_gust_kn": 18.0,
-               "next_change_utc": "2026-09-13T14:00Z", "reason_after": "gusts reach 36 kn",
-               "windows_found": 2},
-  "thresholds": {"wave_max_m": 2.5, "wind_max_kn": 20.0, "gust_max_kn": 34.0, "min_hours": 3}
-}
-```
-
-Not-found is honest: `{"found": false, "note": "No 3h+ departure window
-within limits in the next 72h.", "thresholds": {...}}` — never a
-fabricated window.
-
-## 3. Tests to add (`backend/test_safe_window.py`)
-
-All of these were run against the code above — 9/9 pass:
-
-| # | Case | Expected |
+| # | Case (spec's four named cases in bold) | Expected |
 |---|---|---|
-| 1 | 9 safe hours then a 36 kn gust spike | found, 9 h, `reason_after: "gusts reach 36 kn"` |
-| 2 | gust spike every 3rd hour (max run 2 h) | `found: false` + note |
-| 3 | gust series all `None` | `found: false` (fail-safe, no fabrication) |
-| 4 | empty series | `found: false` + "No hourly forecast series available." |
-| 5 | safe through the whole horizon | found, `next_change_utc: null`, "extends to end of horizon" |
-| 6 | wave breach at the boundary | `reason_after: "waves build to 3.0 m"` |
-| 7 | headline formatting | bilingual strings contain IST times |
-| 8 | marine series shorter than wind series | trimmed to common length, no crash |
-| 9 | short early window + longer later window | **earliest** window returned (4 h), `windows_found: 2` |
+| T1 | **safe window, then deteriorating** (gust spike at h9) | AVAILABLE, 9 h, `end_time = start + 9h`, `currently_safe: true` |
+| T2 | **delayed safe window** (unsafe 12 h, then safe 36 h) | AVAILABLE, starts at h12, `currently_safe: false` |
+| T3 | **24-hour storm** then calm | AVAILABLE, 24 h window after the storm, `max_wave_m` from inside the window |
+| T4 | **storm the whole horizon** | UNAVAILABLE + note + trilingual recommendation |
+| T5 | gust 28 kn (above GOOD 25, below NO-GO 34) | `status: CAUTION`, `window_quality: CAUTION` |
+| T6 | metrics + strings | `max_wave_m`/`max_wind_kn` exact, all three recommendations non-empty |
+| T7 | gust series all `None` | UNAVAILABLE (fail-safe — never fabricate) |
+| T8 | empty series | UNAVAILABLE + note |
+| T9 | safe runs of 2 h everywhere | UNAVAILABLE (below 3 h minimum) |
+| T10 | exactly 3 safe hours | AVAILABLE, `duration_hours: 3` |
 
-## 4. Small extras worth doing in the same PR
+## 5. Two decisions the spec leaves open (flagging, not deciding)
 
-- `hourly_chart`: include `gust_kn` per hour and use the full 48–72 h
-  instead of `[:24]` — the data is already in `hourly_forecast`.
-- The provider's `httpx` timeout is 12 s for both Open-Meteo calls —
-  fine for these, but see `SIH2026_BACKEND_DIAGNOSIS.md` for the MOSDAC
-  timeout problem.
-- Reference implementation to diff against: this repo's
-  `pipeline/forecast.py::find_safe_window()` + its wiring in
-  `pipeline/advisory.py` — in production here since 3 Sep 2026, same
-  thresholds except gusts (30 kn there, 34 kn in the task spec).
+1. **Status vocabulary**: the example only shows `"AVAILABLE"`. v2 uses
+   `AVAILABLE / CAUTION / UNAVAILABLE`, mirroring the GOOD/CAUTION/NO-GO
+   verdict tiers the app already uses. If the frontend wants strictly
+   two statuses, fold CAUTION into AVAILABLE and keep
+   `window_quality` as the differentiator — one-line change.
+2. **May CAUTION hours be part of a window?** v2: yes (window usable,
+   labelled marginal) — NO-GO hours never are. If only GOOD hours
+   should count, change the run condition from `c != "NO-GO"` to
+   `c == "GOOD"` — one-line change.
