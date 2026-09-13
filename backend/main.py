@@ -562,7 +562,7 @@ def get_humidity(
     """Relative-humidity map grid (2 m AGL) from the DWD ICON model via
     Open-Meteo — the same model zoom.earth's humidity map displays,
     rebuilt first-party (zoom.earth has no public tile API). Returns an
-    n×9 grid of RH/temp/dew-point + a ready-to-draw legend. Cached 30 min
+    9×9 default grid of RH/temp/dew-point + a ready-to-draw legend. Cached 30 min
     per 0.1° centre + span + forecast hour."""
     from pipeline.humidity import get_humidity_field
     try:

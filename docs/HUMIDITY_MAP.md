@@ -32,22 +32,22 @@ GET /api/v1/humidity?lat=22.2&lon=69.4&span=3.0&hours=0
 |-------|-------|---------|---------|
 | `lat` | −90…90 | required | centre latitude |
 | `lon` | −180…180 | required | centre longitude |
-| `span` | 0 < s ≤ 30 | 3.0 | half-extent of the box in degrees (span 3 → 6°×6° view) |
+| `span` | 0 < s ≤ 30 | 3.0 | full width of the box in degrees (span 3 → 3°×3° view, centred on lat/lon) |
 | `hours` | 0…48 | 0 | forecast hour to display (0 = now) — drives the time slider |
 
 Response (`200`):
 
 ```jsonc
 {
-  "centre": {"lat": 22.2, "lon": 69.4},
-  "span_deg": 3.0, "grid_n": 9, "step_deg": 0.75,
+  "center": {"lat": 22.2, "lon": 69.4},
+  "span_deg": 3.0, "grid_n": 9, "step_deg": 0.375,
   "hours_ahead": 0,
   "valid_time": "2026-09-13T07:00",          // ICON valid hour, UTC ISO
   "model": "icon_global (DWD ICON global) via Open-Meteo — the model zoom.earth's humidity map displays",
   "source": "https://open-meteo.com/ (DWD ICON, CC-BY-4.0)",
   "n_points": 81,
   "points": [                                 // row-major, north→south (like a raster)
-    {"lat": 25.2, "lon": 66.4, "rh_pct": 58.0, "temp_c": 31.5,
+    {"lat": 23.7, "lon": 67.9, "rh_pct": 58.0, "temp_c": 31.5,
      "dew_point_c": 22.4, "dew_depression_c": 9.1,
      "land": true, "color": "#F4D03F"}
     // … 81 points …
@@ -66,7 +66,7 @@ Response (`200`):
 ```
 
 Errors are honest, never fabricated:
-`{"error": "…", "centre": …, "span_deg": …, "hours_ahead": …, "hint": "retry later…"}` with HTTP 500 from the endpoint.
+`{"error": "…", "center": …, "span_deg": …, "hours_ahead": …, "hint": "retry later…"}` with HTTP 500 from the endpoint.
 
 ## How the grid is fetched (one API call, not 81)
 
@@ -125,6 +125,15 @@ endpoint tests read the palette dynamically).
 4. **Legend**: render `legend[]` as a gradient bar — the JSON is ready to draw.
 5. **Dew-point bonus**: `dew_depression_c` (T − Td) is served per point; low values
    (< 2 °C) ≈ fog/condensation risk — useful for the fishermen's advisory UX.
+
+## What it looks like
+
+`docs/humidity_preview_kutch.png` — rendered from a **live DWD ICON run**
+(13 Sep 2026, fetched via Open-Meteo for the Kutch view: dry orange-yellow
+over the Rann interior, moist teal-blue over the Arabian Sea and the
+Saurashtra coast, now vs +6 h panels + legend). Regenerate or restyle with
+`python3 scripts/render_humidity_preview.py` — it embeds the live snapshot
+and runs fully offline.
 
 ## SIH-2026 porting notes (prabhbani/ORCA-SIH-2026)
 
