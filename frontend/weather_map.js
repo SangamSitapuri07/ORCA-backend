@@ -30,7 +30,9 @@ function colorFor(rh) {
   while (i < PALETTE.length - 2 && v > PALETTE[i + 1][0]) i++;
   const a = PALETTE[i], b = PALETTE[i + 1];
   const f = (v - a[0]) / (b[0] - a[0] || 1);
-  return [0, Math.round(a[1] + f * (b[1] - a[1])),
+  /* [1, r, g, b] — slot 0 is the "valid" flag the tiny-raster builders
+   * gate their pixel alpha on (null data → [0,…] → transparent) */
+  return [1, Math.round(a[1] + f * (b[1] - a[1])),
           Math.round(a[2] + f * (b[2] - a[2])),
           Math.round(a[3] + f * (b[3] - a[3]))];
 }
@@ -46,9 +48,9 @@ function colorForSst(t) {
   while (i < SST_PALETTE.length - 2 && v > SST_PALETTE[i + 1][0]) i++;
   const a = SST_PALETTE[i], b = SST_PALETTE[i + 1];
   const f = (v - a[0]) / (b[0] - a[0] || 1);
-  return [0, Math.round(a[1] + f * (b[1] - a[1])),
+  return [1, Math.round(a[1] + f * (b[1] - a[1])),
           Math.round(a[2] + f * (b[2] - a[2])),
-          Math.round(a[3] + f * (b[3] - a[3]))];
+          Math.round(a[3] + f * (b[3] - a[3]))];   /* [1,r,g,b]: 1 = valid */
 }
 /* wave-height palette (m → colour), mirrors ocean_grid.wave_legend */
 const WAVE_PALETTE = [
