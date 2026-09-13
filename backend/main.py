@@ -1042,7 +1042,8 @@ def osm_tile(z: int, x: int, y: int):
                 blob = r.read()
         except Exception:  # noqa: BLE001 — offline: draw our own tile
             return Response(_graticule_tile_png(z, x, y), media_type="image/png",
-                            headers={"Cache-Control": "public, max-age=300"})
+                            headers={"Cache-Control": "public, max-age=300",
+                                     "X-ORCA-Offline": "1"})
         if not blob.startswith(b"\x89PNG"):
             raise HTTPException(502, "OSM tile server returned a non-PNG response")
         p.parent.mkdir(parents=True, exist_ok=True)

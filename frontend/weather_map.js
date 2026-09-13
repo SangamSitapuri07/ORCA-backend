@@ -206,10 +206,38 @@ const BASEMAPS = [
   {id: 'proxy', label: 'Proxy',
    url: '/api/v1/tiles/{z}/{x}/{y}.png',
    attr: 'ORCA tile proxy', maxZoom: 12},
+  /* no URL — the offline nautical chart: real Natural Earth land,
+   * coastline + borders drawn as vectors, zero tile requests */
+  {id: 'chart', label: 'Chart'},
 ];
-let baseLayer = null, tileOk = false;
+let baseLayer = null, tileOk = false, chartLayer = null, CHART = false;
+const CHART_STYLE = {
+  land:   {color: '#4d7096', weight: 1, fillColor: '#182634', fillOpacity: 1},
+  coast:  {color: '#8fb4d4', weight: 1.6, fillColor: '#1c2e40', fillOpacity: 1},
+  border: {color: '#3e5878', weight: 0.9, dashArray: '6 4'},
+};
+function mountChart() {
+  CHART = true; needsField = true;
+  if (baseLayer) { map.removeLayer(baseLayer); baseLayer = null; }
+  if (!chartLayer) {
+    map.createPane('chartPane');                    /* above tiles (200), */
+    map.getPane('chartPane').style.zIndex = 350;    /* below data (450)  */
+    chartLayer = L.geoJSON(null, {pane: 'chartPane', interactive: false,
+      style: f => CHART_STYLE[f.properties.kind] || CHART_STYLE.border});
+    fetch('/frontend/vendor/chart.geojson')
+      .then(r => r.ok ? r.json() : null)
+      .then(g => { if (g) chartLayer.addData(g); })
+      .catch(() => {});
+  }
+  chartLayer.addTo(map);
+  document.querySelectorAll('.bm').forEach(b =>
+    b.classList.toggle('on', b.dataset.bm === 'chart'));
+}
 function mountBasemap(i) {
   const cfg = BASEMAPS[Math.max(0, Math.min(i, BASEMAPS.length - 1))];
+  if (cfg.id === 'chart') { mountChart(); return; }
+  CHART = false; needsField = true;
+  if (chartLayer) map.removeLayer(chartLayer);
   if (baseLayer) map.removeLayer(baseLayer);
   tileOk = false;
   baseLayer = L.tileLayer(cfg.url, {
@@ -223,6 +251,20 @@ function mountBasemap(i) {
     .addTo(map);
   document.querySelectorAll('.bm').forEach(b =>
     b.classList.toggle('on', b.dataset.bm === cfg.id));
+  if (cfg.id === 'proxy') {
+    /* the proxy always answers — but with OUR drawn graticule when the
+     * backend has no egress. Detect that (X-ORCA-Offline) and upgrade
+     * to the real vector chart instead of an abstract grid. */
+    const la = Math.max(-85, Math.min(85, map.getCenter().lat));
+    const zz = Math.round(map.getZoom()), n = Math.pow(2, zz);
+    const tx = Math.floor((map.getCenter().lng + 180) / 360 * n);
+    const ty = Math.floor((1 - Math.log(Math.tan(la * Math.PI / 180) +
+               1 / Math.cos(la * Math.PI / 180)) / Math.PI) / 2 * n);
+    fetch(`/api/v1/tiles/${zz}/${tx}/${ty}.png`)   /* GET — HEAD is 405 */
+      .then(r => { if (r.ok && r.headers.get('X-ORCA-Offline') === '1')
+                     mountChart(); })
+      .catch(() => {});
+  }
 }
 mountBasemap(0);                    /* satellite — the zoom.earth look */
 document.querySelectorAll('.bm').forEach(b => b.addEventListener('click', () => {
@@ -448,6 +490,7 @@ function drawField(tt) {
     }
   }
   if ($('tgRef').checked) drawRef(p0, p1);
+  else if (CHART) drawRef({x: 0, y: 0}, {x: innerWidth, y: innerHeight});
   fx.strokeStyle = 'rgba(150,180,205,0.5)'; fx.lineWidth = 1.5;
   fx.strokeRect(p0.x, p0.y, wpx, hpx);
 }
@@ -459,12 +502,16 @@ function drawRef(p0, p1) {
   fx.font = '11px "Segoe UI", system-ui, sans-serif';
   const lonL = wLon(x0 + origin.x), lonR = wLon(x1 + origin.x);
   const latT = wLat(y0 + origin.y), latB = wLat(y1 + origin.y);
-  for (let lon = Math.ceil(lonL); lon <= Math.floor(lonR); lon++) {
+  /* adaptive grid spacing — every degree when zoomed in, coarser when
+     the whole Arabian Sea is in view (100 one-degree lines = noise) */
+  const span = Math.max(lonR - lonL, latT - latB);
+  const step = span > 45 ? 10 : span > 18 ? 5 : span > 7 ? 2 : 1;
+  for (let lon = Math.ceil(lonL / step) * step; lon <= Math.floor(lonR); lon += step) {
     const x = mX(lon) - origin.x;
     fx.beginPath(); fx.moveTo(x, y0); fx.lineTo(x, y1); fx.stroke();
     fx.fillText(lon + '°E', x + 4, y1 - 6);
   }
-  for (let lat = Math.ceil(latB); lat <= Math.floor(latT); lat++) {
+  for (let lat = Math.ceil(latB / step) * step; lat <= Math.floor(latT); lat += step) {
     const y = mY(lat) - origin.y;
     fx.beginPath(); fx.moveTo(x0, y); fx.lineTo(x1, y); fx.stroke();
     fx.fillText(lat + '°N', x0 + 4, y + 13);

@@ -11,6 +11,7 @@ fingerprint that only real model output would show).
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 from pipeline import weather_grid as wg
 from pipeline.weather_demo_snapshot import (
@@ -237,3 +238,16 @@ def test_endpoint_demo_and_page():
         from backend.main import _graticule_tile_png
         blob = _graticule_tile_png(7, 88, 56)
         assert blob.startswith(b"\x89PNG") and len(blob) > 500
+        # offline nautical CHART: when no tile server is reachable the map
+        # must still show real geography — Natural Earth land polygons,
+        # 1:10m Kutch coastline and country borders, served first-party
+        # (a bare graticule grid made the data look disconnected "floating
+        # anywhere": user-visible regression 2026-09-13)
+        geo = (Path(__file__).resolve().parents[2] / "frontend"
+               / "vendor" / "chart.geojson").read_text()
+        for kind in ('"kind":"land"', '"kind":"coast"', '"kind":"border"'):
+            assert kind in geo, kind
+        assert '"type":"Polygon"' in geo and len(geo) > 100_000
+        assert "mountChart" in js.text and "chart.geojson" in js.text
+        assert "X-ORCA-Offline" in js.text
+        assert 'data-bm="chart"' in c.get("/map").text
