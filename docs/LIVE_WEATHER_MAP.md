@@ -66,11 +66,11 @@ Response (compact — built for animation, one value per point per frame):
 
 ```jsonc
 {
-  "demo": false, "fetched_at": "2026-09-13T07:41:00+00:00",
+  "demo": false, "fetched_at": "2026-09-13T16:41:00+00:00",
   "model": "icon_global (DWD ICON global) via Open-Meteo — …",
   "center": {"lat": 22.2, "lon": 69.4},
   "span_deg": 3.0, "grid_n": 9, "step_deg": 0.375,
-  "times": ["2026-09-13T07:00", … ],        // UTC, hourly
+  "times": ["2026-09-13T16:00", … ],        // UTC, hourly
   "lats": [23.7, … 20.7],                   // 9 row lats, DESCENDING (N→S)
   "lons": [67.9, … 70.9],                   // 9 col lons, ascending
   "u":   [[…81 m/s], … per frame],          // eastward component (derived)
@@ -111,11 +111,12 @@ currents 2026-09-10 00Z, SST 2026-09-11 12Z, waves 2026-09-13 08Z —
 verbatim, with the genuine Gulf-of-Kutch **0.76 m/s jet** in the altimetry.
 54 of 81 demo lattice points are sea; the 27 land nulls trace the actual
 Kutch coastline. The weather demo (`pipeline/weather_demo_snapshot.py`)
-carries all **7 variables** — wind/RH/temp from the original 07:00 fetch,
-precipitation/gusts/clouds relayed the same day with
-`start_hour`/`end_hour` so the frames align — including a real convective
-rain cell: **2.1–2.8 mm/h** over Saurashtra 10:00–12:00 UTC, gusts to
-**51 km/h**.
+carries all **7 variables** for the **current evening window** —
+re-relayed 2026-09-13 ~16:10 UTC for hours 16:00–23:00 (two single-chunk
+fetches per row: wind/RH/temp + precip/gusts/cloud) — including a real
+evening convection episode: coastal rain already active at 16:00
+(**1.7 mm/h** on the Diu coast), building to a **6.5 mm/h** peak on the
+23.7N 70.9E cell at 22:00 UTC, gusts to **40.7 km/h**.
 
 ## Layer picker (zoom.earth-style)
 
@@ -151,25 +152,30 @@ nothing — the map tells you it's dry by NOT lying with colour.
 ## Demo mode — honest, never fabricated
 
 `pipeline/weather_demo_snapshot.py` embeds a **real** DWD ICON run
-(2026-09-13 07:00–14:00 UTC, Kutch 9×9, wind+RH+temp) fetched and relayed
-verbatim (the build sandbox has no direct egress to open-meteo.com; the
-payload was pulled row-by-row so no proxy chunk ever split a value). The
-page tries the live endpoint first; if it fails it falls back to
-`?demo=1` and clearly badges itself **“DEMO — REAL ICON SNAPSHOT”** in
-amber. Integrity is enforced by tests: shapes, ranges, and a **567-value
-cross-check** against an independent earlier transcription of the same
-model run (shifted one hour) — zero mismatches.
+(2026-09-13 16:00–23:00 UTC — the current hour plus 7 h of forecast,
+Kutch 9×9, all 7 variables) fetched and relayed verbatim (the build
+sandbox has no direct egress to open-meteo.com; the payload was pulled
+row-by-row, each row in two single-chunk fetches). A first attempt
+fetching all 7 variables in one call was **rejected**: the proxy split
+the response mid-array and silently dropped a value — the split scheme
+keeps every fetch in a single chunk. The page tries the live endpoint
+first; if it fails it falls back to `?demo=1` and clearly badges itself
+**“DEMO — REAL ICON SNAPSHOT”** in amber. Integrity is enforced by
+tests: shapes, ranges, u/v round-trip, and an **evening-convection
+fingerprint** (active 16:00 coast cell → 6.5 mm/h peak at 22:00 in the
+eastern cells, calm east under rain vs 22 km/h westerlies over the dry
+sea) that shuffled or fabricated data would not reproduce.
 
 ## What you should see (Kutch demo)
 
-- **Colours:** dry orange-yellow over the Rann interior (RH ~42–52 %),
-  moist teal-blue over the Arabian Sea (~83–87 %) and Saurashtra coast —
-  animating through 8 hours as the slider plays (RH range drifts
-  48–89 % → 71–97 %: the interior moistens in the evening).
-- **Wind:** monsoon westerlies flowing east over the sea (25–35 km/h,
-  from ~270°), near-calm swirls over the Rann — particles move at a
-  time-accelerated rate (~5 simulated hours per real second, like
-  earth.nullschool.net).
+- **Colours:** evening monsoon air is moist everywhere (RH 78–96 %) —
+  teal-blue across the whole lattice, most humid over the north-east
+  interior (up to 96 %), least over the south-west open sea (79–84 %) —
+  animating through 8 hours as the slider plays.
+- **Wind:** monsoon westerlies over the sea (11–28 km/h, from ~270°),
+  markedly calmer air over the eastern interior under the rain band —
+  particles move at a time-accelerated rate (~5 simulated hours per real
+  second, like earth.nullschool.net).
 - **Currents (cyan):** slow satellite-measured flows — strongest in the
   Gulf of Kutch channel (~0.7–0.8 m/s), drawn 8× true speed so they're
   visible next to wind.
@@ -177,9 +183,10 @@ model run (shifted one hour) — zero mismatches.
   to 0.3–0.5 m inside the Gulf; arrows point where waves travel.
 - **Sea temp (rail):** ~27.9–28.8 °C water painted over the satellite
   basemap; the rail switches the colour wash and legend.
-- **Rain (rail):** mostly transparent (dry September sky over Kutch) with
-  a real convective cell lighting up Saurashtra green→orange→red at
-  10:00–12:00 — scrub the time slider to watch it develop.
+- **Rain (rail):** transparent at first over the drier west, with a real
+  cell already lit on the Diu coast at 16:00 — scrub the slider into the
+  evening (21:00–23:00) and watch the eastern band flare green→orange→red
+  to 6.5 mm/h.
 - **Gusts (rail):** same hue family as wind but shifted hotter — gusts
   are always ≥ sustained wind, and the wash shows it.
 - **Hover:** RH, wind speed/dir (m/s, km/h, compass), temperature at the

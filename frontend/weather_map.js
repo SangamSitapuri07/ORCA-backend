@@ -601,16 +601,18 @@ function drawWaves(tt) {
 }
 
 /* ── HUD ── */
+let pinLL = null, pinMarker = null;   // click-to-pin readout
 function updateHud() {
   if (!DATA) return;
-  if (!cursorLL) {
+  const focus = pinLL || cursorLL;
+  if (!focus) {
     $('hPos').textContent = $('hRh').textContent = $('hWind').textContent =
       $('hTemp').textContent = $('hGust').textContent =
       $('hRain').textContent = '—';
-    $('hHint').textContent = 'move the cursor over the map';
+    $('hHint').textContent = 'move the cursor over the map — or click to pin a point';
     return;
   }
-  const {lat, lng} = cursorLL;
+  const {lat, lng} = focus;
   $('hPos').textContent = lat.toFixed(2) + '°N ' + lng.toFixed(2) + '°E';
   const rh = sampleField(lat, lng, t, 'rh');
   $('hRh').textContent = rh === null ? 'outside grid' : rh.toFixed(0) + ' %';
@@ -648,7 +650,9 @@ function updateHud() {
     }
     $('hSea').textContent = parts.length ? parts.join(' · ') : 'land';
   } else $('hSea').textContent = '—';
-  $('hHint').textContent = 'values at cursor · ' + timeLabel(t) + ' IST · currents shown 8× speed';
+  $('hHint').textContent = (pinLL ? '📌 pinned at ' + pinLL.lat.toFixed(2) + '°N ' +
+      pinLL.lng.toFixed(2) + '°E · click the pin again to unpin · ' :
+      'values at cursor · ') + timeLabel(t) + ' IST · currents shown 8× speed';
 }
 
 /* ── time ── */
@@ -737,6 +741,23 @@ $('play').onclick = () => {
 $('tslider').oninput = (e) => { t = parseInt(e.target.value, 10) / 100; };
 map.on('mousemove', (e) => { cursorLL = e.latlng; });
 map.on('mouseout', () => { cursorLL = null; });
+/* click-to-pin: first click drops a pin and freezes the HUD readout on
+   that point (so you can scrub the time slider and watch the point's
+   values evolve); clicking the pin again removes it. */
+map.on('click', (e) => {
+  if (pinLL && Math.abs(e.latlng.lat - pinLL.lat) < 0.02 &&
+      Math.abs(e.latlng.lng - pinLL.lng) < 0.02) {
+    pinLL = null;
+    if (pinMarker) { map.removeLayer(pinMarker); pinMarker = null; }
+    return;
+  }
+  pinLL = e.latlng;
+  if (!pinMarker) {
+    pinMarker = L.circleMarker(pinLL, {radius: 7, color: '#fff', weight: 2.5,
+                                       fillColor: '#0af', fillOpacity: 0.9});
+    pinMarker.addTo(map);
+  } else { pinMarker.setLatLng(pinLL); }
+});
 map.on('move zoom', () => { reproj(); needsField = true; });
 map.on('zoomstart', () => {
   px.clearRect(0, 0, pC.clientWidth, pC.clientHeight);

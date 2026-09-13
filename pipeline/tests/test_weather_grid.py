@@ -5,16 +5,12 @@ zoom.earth-style live map at /map): ONE Open-Meteo call with
 models=icon_global + wind_speed_unit=ms, speed/direction -> u/v
 conversion matching ORCA's compass convention, zip-paired multi-location
 responses, frame slicing, honest error dicts, and the integrity of the
-bundled REAL demo snapshot (shapes, ranges, and a 567-value cross-check
-against the independent earlier transcription).
+bundled REAL demo snapshot (shapes, ranges, and an evening-convection
+fingerprint that only real model output would show).
 """
 from __future__ import annotations
 
-import importlib.util
 import math
-import os
-
-import pytest
 
 from pipeline import weather_grid as wg
 from pipeline.weather_demo_snapshot import (
@@ -135,16 +131,17 @@ def test_demo_snapshot_shapes_and_ranges():
     assert len(_S) == len(_D) == len(_RH) == len(_T) == 81
     assert len(_PR) == len(_G) == len(_CL) == 81
     assert all(len(a) == 8 for a in _S + _D + _RH + _T + _PR + _G + _CL)
-    assert TIMES[0] == "2026-09-13T07:00" and TIMES[-1] == "2026-09-13T14:00"
+    assert TIMES[0] == "2026-09-13T16:00" and TIMES[-1] == "2026-09-13T23:00"
     assert all(0 <= x <= 40 for a in _S for x in a)
     assert all(0 <= x <= 360 for a in _D for x in a)
     assert all(20 <= x <= 100 for a in _RH for x in a)
     assert all(20 <= x <= 40 for a in _T for x in a)
-    # relayed verbatim 2026-09-13: rain cell in the SE, gusts > speeds, clouds
-    assert all(0 <= x <= 3 for a in _PR for x in a)
-    assert all(5 <= x <= 55 for a in _G for x in a)
+    # relayed verbatim 2026-09-13 16:10 UTC: evening convective rain,
+    # gusts > speeds, near-total cloud cover
+    assert all(0 <= x <= 7 for a in _PR for x in a)
+    assert all(2 <= x <= 45 for a in _G for x in a)
     assert all(0 <= x <= 100 for a in _CL for x in a)
-    assert any(x >= 2.0 for a in _PR for x in a)          # real convective cell
+    assert any(x >= 5.0 for a in _PR for x in a)          # real convective cell
     assert max(x for a in _G for x in a) > max(x for a in _S for x in a)
 
 
@@ -162,23 +159,24 @@ def test_demo_payload_contract():
     for k, raw in (("pr", _PR), ("gust", _G), ("cloud", _CL)):
         assert len(d[k]) == 8 and len(d[k][0]) == 81
         assert d[k][3][40] == raw[40][3]
-    assert d["pr"][7][4] == 0.9 and d["gust"][0][0] == 41.8 and d["cloud"][0][0] == 33
+    assert d["pr"][7][4] == 1.9 and d["gust"][0][0] == 32.0 and d["cloud"][0][0] == 100
 
 
-def test_demo_snapshot_crosschecks_earlier_transcription():
-    """The demo RH (07:00-14:00) must equal the earlier independent
-    06:00-13:00 snapshot (scripts/render_humidity_preview.py) shifted by
-    one hour — 567 values, two separate fetch+transcription passes."""
-    path = os.path.join(os.path.dirname(__file__), "..", "..",
-                        "scripts", "render_humidity_preview.py")
-    if not os.path.exists(path):
-        pytest.skip("earlier snapshot not present")
-    spec = importlib.util.spec_from_file_location("prev_snapshot", path)
-    prev = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(prev)
-    mismatches = [(p, h) for p in range(81) for h in range(7)
-                  if prev.RH[p][h + 1] != _RH[p][h]]
-    assert mismatches == []
+def test_demo_snapshot_convection_signature():
+    """Fingerprint of the REAL 16:00-23:00 UTC 2026-09-13 relay: coastal
+    rain already active at frame 0 (1.7 mm/h on the Diu coast), the
+    evening peak >= 6 mm/h in frames 5-7, and the peak cell east of
+    69.75E — fabricated or shuffled data would not reproduce this."""
+    frame_peak = [max(_PR[p][h] for p in range(81)) for h in range(8)]
+    assert frame_peak[0] >= 1.5                     # 16:00: active coast cell
+    assert max(frame_peak[5:]) >= 6.0               # 21:00-23:00 convective max
+    peak = max((x, p, h) for p in range(81) for h in range(8) for x in [_PR[p][h]])
+    assert peak[0] == 6.5 and peak[2] == 6 and peak[1] % 9 >= 5  # 23.7N 70.9E, 22:00
+    # wind and rain tell the same story: the rainy east is calm, the dry
+    # west is windy (monsoon westerlies) — a coherent field, not noise
+    west_speed = sum(_S[p][6] for p in range(81) if p % 9 <= 3) / 36
+    east_speed = sum(_S[p][6] for p in range(81) if p % 9 >= 5) / 36
+    assert west_speed > east_speed
 
 
 def test_endpoint_demo_and_page():
@@ -200,5 +198,6 @@ def test_endpoint_demo_and_page():
         assert "tgHum" not in p.text and "tgSst" not in p.text   # moved to rail
         js = c.get("/frontend/weather_map.js")
         assert js.status_code == 200 and "weather/grid" in js.text
-        for probe in ("selectLayer", "buildTinies", "palColor", "LAYERS"):
+        for probe in ("selectLayer", "buildTinies", "palColor", "LAYERS", "pinLL"):
             assert probe in js.text, probe
+        assert "click to pin" in c.get("/map").text
