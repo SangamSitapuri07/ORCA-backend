@@ -195,3 +195,93 @@ from safe_window import find_safe_departure_window
    labelled marginal) — NO-GO hours never are. If only GOOD hours
    should count, change the run condition from `c != "NO-GO"` to
    `c == "GOOD"` — one-line change.
+
+## 6. v2.1 review of the implemented feature (13 Sep 2026)
+
+The teammate's port is **faithful** — the reported live payload matches
+v2 field-for-field, and their T1–T10 are exactly this doc's test table.
+Three findings from reviewing the reported live output:
+
+### ⚠️ 6.1 The work is NOT on GitHub yet
+
+`prabhbani/ORCA-SIH-2026` `origin/main` is still at `a7af561` — no
+`safe_window.py`, no wiring, no tests are pushed. Everything currently
+lives only on the author's machine. **Commit and push first**, before
+anything else — unreviewable work is one coffee-spill away from being
+lost.
+
+### 🐞 6.2 Real bug in the live payload: "between 10:30 AM and 10:30 AM"
+
+The verified 48-hour window produced:
+
+> "Optimal departure window between 10:30 AM and 10:30 AM (max wave
+> 1.5 m, max wind 12 kn)."
+
+Start and end display **identically** because `_ist12()` formats only
+the time-of-day — a window spanning two midnights (13 Sep → 15 Sep)
+loses its dates. A fisherman reads that as nonsense. Two smaller issues
+in the same string: a full-horizon window is closed by the *forecast
+boundary*, not by weather, and nothing says so; and `12.5 kn` renders
+as "12 kn" (Python's round-half-to-even on `:.0f` understates a safety
+number).
+
+### ✅ 6.3 The v2.1 patch (tested — 3 new cases + 10 regression, all pass)
+
+Three surgical replacements in `safe_window.py`:
+
+**(a)** Replace `_ist12` with a day-aware, trilingual formatter:
+
+```python
+_WEEKDAYS = {
+    "en": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+    "hi": ["सोमवार", "मंगलवार", "बुधवार", "गुरुवार", "शुक्रवार", "शनिवार", "रविवार"],
+    "te": ["సోమవారం", "మంగళవారం", "బుధవారం", "గురువారం", "శుక్రవారం", "శనివారం", "ఆదివారం"],
+}
+
+def _ist_local(dt_utc: datetime, lang: str = "en", with_day: bool = False) -> str:
+    """IST time-of-day; appends the weekday when the window crosses midnight
+    (a 48 h window must NOT read 'between 10:30 AM and 10:30 AM')."""
+    local = dt_utc + IST_OFFSET
+    t = local.strftime("%I:%M %p").lstrip("0")
+    if with_day:
+        t += " " + _WEEKDAYS[lang][local.weekday()]
+    return t
+```
+
+**(b)** In `find_safe_departure_window`, before building the strings:
+
+```python
+    crosses_midnight = (start_dt + IST_OFFSET).date() != (end_dt + IST_OFFSET).date()
+    s_local = _ist_local(start_dt, "en", crosses_midnight)
+    e_local = _ist_local(end_dt,   "en", crosses_midnight)
+    s_hi = _ist_local(start_dt, "hi", crosses_midnight)
+    e_hi = _ist_local(end_dt,   "hi", crosses_midnight)
+    s_te = _ist_local(start_dt, "te", crosses_midnight)
+    e_te = _ist_local(end_dt,   "te", crosses_midnight)
+    # a window that runs out of forecast (not out of safety) must say so
+    horizon_note = ("Window extends to the end of the forecast horizon — "
+                    "re-check before it closes." if b == end - start else None)
+```
+
+then use `s_hi/e_hi` in `recommendation_hi`, `s_te/e_te` in
+`recommendation_te`, add `"note": horizon_note,` to the returned dict,
+and change the EN/HI/TE "max wind" display from `{max_wind:.0f}` to
+`{max_wind:.1f}` (12.5 kn must not print as "12 kn").
+
+**Result on the exact live case:**
+
+> "Optimal departure window between 10:30 AM **Sun** and 10:30 AM
+> **Tue** (max wave 1.5 m, max wind **12.5** kn)."
+> `"note": "Window extends to the end of the forecast horizon — re-check
+> before it closes."`
+> HI: "10:30 AM **रविवार** से 10:30 AM **मंगलवार** के बीच प्रस्थान के लिए
+> सर्वोत्तम समय।"
+> TE: "10:30 AM **ఆదివారం** నుండి 10:30 AM **మంగళవారం** వరకు
+> బయలుదేరడానికి అనుకూలమైన సమయం."
+
+Same-day windows are unchanged (no weekday clutter, `note: null`).
+
+**New tests to add** (alongside T1–T10): T11 fully-safe 48 h series →
+weekday appears in all three strings, start ≠ end display, horizon
+note present; T12 same-day window → no weekday, no note; T13 wind 12.5
+→ "12.5 kn" in the EN string.
