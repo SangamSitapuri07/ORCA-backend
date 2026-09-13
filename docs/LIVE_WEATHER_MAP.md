@@ -1,11 +1,13 @@
 # Live Animated Weather Map (zoom.earth-style) — ORCA-backend
 
-**Open it:** start the backend and visit **`/map`** — interactive map with
-animated **wind particles**, **satellite ocean currents**, **wave arrows**,
-**sea-surface temperature**, and humidity colours that flow through the
-forecast hours, plus a time slider, hover readout, and per-layer toggles.
-Weather from the same model family zoom.earth uses (DWD ICON via
-Open-Meteo); sea layers from NOAA satellites — all first-party.
+**Open it:** start the backend and visit **`/map`** — an interactive map
+with a **zoom.earth-style layer picker**: nine selectable layers
+(humidity · temperature · wind speed · gusts · rain · clouds · sea temp ·
+waves · currents), each repainting the animated colour wash with its own
+palette and legend. Wind particles, satellite-current particles and wave
+chevrons animate on top; time slider, hover readout and layer toggles
+included. Weather from the same model family zoom.earth uses (DWD ICON
+via Open-Meteo); sea layers from NOAA satellites — all first-party.
 
 ```
 GET /map                          → the map page (no build step, Leaflet from CDN)
@@ -83,6 +85,10 @@ Missing values are `null` — never fabricated. Errors are honest HTTP 500s.
 
 ## Ocean layers — GET /api/v1/ocean/grid
 
+The weather feed carries **7 hourly fields** per point — `u`,`v` (derived
+from speed+direction), `rh`, `temp`, **`pr`** (precipitation mm),
+**`gust`** (km/h), **`cloud`** (%) — one Open-Meteo call, same lattice.
+
 Same lattice/params as the weather grid (`lat, lon, span ≤30, frames ≤25,
 grid ≤16`, `?demo=1`). Three independent real sources, no logins:
 
@@ -104,7 +110,31 @@ grid ≤16`, `?demo=1`). Three independent real sources, no logins:
 currents 2026-09-10 00Z, SST 2026-09-11 12Z, waves 2026-09-13 08Z —
 verbatim, with the genuine Gulf-of-Kutch **0.76 m/s jet** in the altimetry.
 54 of 81 demo lattice points are sea; the 27 land nulls trace the actual
-Kutch coastline.
+Kutch coastline. The weather demo (`pipeline/weather_demo_snapshot.py`)
+carries all **7 variables** — wind/RH/temp from the original 07:00 fetch,
+precipitation/gusts/clouds relayed the same day with
+`start_hour`/`end_hour` so the frames align — including a real convective
+rain cell: **2.1–2.8 mm/h** over Saurashtra 10:00–12:00 UTC, gusts to
+**51 km/h**.
+
+## Layer picker (zoom.earth-style)
+
+Left rail on `/map`; each selection swaps the wash, palette and legend:
+
+| layer | source | palette | notes |
+|---|---|---|---|
+| humidity % | ICON `rh` | existing RH ramp | default |
+| temperature | ICON `temp` | 20–36 °C blue→red | |
+| wind speed | ‖u,v‖·3.6 | 0–75 km/h blue→red | particles stay |
+| wind gusts | ICON `wind_gusts_10m` | 10–90 km/h | gusts ≥ wind, always |
+| rain | ICON `precipitation` | 0.05–12 mm/h green→purple | **dry (<0.05) = transparent** |
+| clouds | ICON `cloud_cover` | 20–100 % grey→white | <10 % transparent |
+| sea temp | CoralTemp `sst` | 25–29 °C | sea cells only |
+| waves | Marine `wh` (nearest hour) | 0–4 m | chevrons stay |
+| currents | ‖cu,cv‖ | 0–1.2 m/s | cyan particles stay |
+
+Rain/cloud "transparent below cut" mirrors zoom.earth: a dry sky paints
+nothing — the map tells you it's dry by NOT lying with colour.
 
 ## Wire-format facts (verified live 2026-09-13)
 
@@ -145,8 +175,13 @@ model run (shifted one hour) — zero mismatches.
   visible next to wind.
 - **Waves (chevrons):** ~1.6–1.8 m swell from the SSW offshore, decaying
   to 0.3–0.5 m inside the Gulf; arrows point where waves travel.
-- **Sea temp (toggle):** ~27.9–28.8 °C water painted over the satellite
-  basemap; the toggle switches the colour wash and legend.
+- **Sea temp (rail):** ~27.9–28.8 °C water painted over the satellite
+  basemap; the rail switches the colour wash and legend.
+- **Rain (rail):** mostly transparent (dry September sky over Kutch) with
+  a real convective cell lighting up Saurashtra green→orange→red at
+  10:00–12:00 — scrub the time slider to watch it develop.
+- **Gusts (rail):** same hue family as wind but shifted hotter — gusts
+  are always ≥ sustained wind, and the wash shows it.
 - **Hover:** RH, wind speed/dir (m/s, km/h, compass), temperature at the
   cursor, at the displayed (interpolated) time.
 
