@@ -669,11 +669,19 @@ def ocean_grid(
 @app.get("/map", include_in_schema=False)
 def weather_map_page():
     """The interactive animated weather map (wind particles + humidity
-    colours + time slider) — served first-party, no build step."""
-    from fastapi.responses import FileResponse, RedirectResponse
+    colours + time slider) — served first-party, no build step.
+
+    The <script> src gets ?v=<build commit> injected so a browser can
+    NEVER mix a cached HTML with a differently-versioned JS — a stale
+    pair (old HTML lacking #fitbox + new JS wiring it) threw at startup
+    and left a completely dead map that looked like 'play not working'.
+    """
+    from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
     root = Path(__file__).resolve().parent.parent
-    return FileResponse(str(root / "frontend" / "weather_map.html"),
-                        media_type="text/html")
+    html = (root / "frontend" / "weather_map.html").read_text()
+    html = html.replace("/frontend/weather_map.js",
+                        f"/frontend/weather_map.js?v={_GIT_COMMIT}")
+    return HTMLResponse(html)
 
 
 try:  # static assets for the map page (js); mount only if the dir exists

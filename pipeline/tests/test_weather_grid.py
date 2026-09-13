@@ -216,4 +216,12 @@ def test_endpoint_demo_and_page():
         assert "fitbox" in c.get("/map").text
         for probe in ("dataBounds", "coverBox", "dashArray"):
             assert probe in js.text, probe
+        # playback robustness: crash-proof render loop, visible script
+        # errors, clamped frame indices, and a per-build script URL so a
+        # cached HTML can never pair with a mismatched JS (that mix left
+        # a dead map that looked like "play does nothing")
+        assert "loop._err" in js.text
+        assert "window.addEventListener('error'" in js.text
+        assert "Math.max(0, Math.min(DATA.times.length - 1, Math.floor(tt)))" in js.text
+        assert "weather_map.js?v=" in p.text
         assert "click to pin" in c.get("/map").text

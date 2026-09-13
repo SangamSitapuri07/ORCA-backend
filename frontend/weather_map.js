@@ -371,7 +371,10 @@ function sampleField(lat, lon, tt, key) {
   while (c < n - 2 && lon > lons[c + 1]) c++;
   const fr = (lats[r] - lat) / (lats[r] - lats[r + 1]);
   const fc = (lon - lons[c]) / (lons[c + 1] - lons[c]);
-  const fA = Math.floor(tt), fB = Math.min(fA + 1, DATA.times.length - 1);
+  /* clamp the frame pair — t must never index outside the data (a
+   * negative/overshot t crashed the render loop before this guard) */
+  const fA = Math.max(0, Math.min(DATA.times.length - 1, Math.floor(tt)));
+  const fB = Math.min(fA + 1, DATA.times.length - 1);
   const g = (f) => {
     const arr = DATA[key][f];
     const i00 = arr[r * n + c], i10 = arr[r * n + c + 1];
@@ -740,24 +743,39 @@ function showStatus(msg, isErr) {
 }
 function hideStatus() { $('status').style.display = 'none'; }
 
+/* surface ANY script error visibly — a silent dead map is the worst
+ * failure mode ("play does nothing" with no clue why) */
+window.addEventListener('error', (e) => {
+  try { showStatus('script error: ' + (e.message || e.error || 'unknown'), true); } catch (_) {}
+});
+
 /* ── main loop ── */
 function loop(ts) {
   const dt = Math.min((ts - lastTs) / 1000 || 0.016, 0.05);
   lastTs = ts;
-  if (DATA) {
-    if (playing) {
-      t += dt * HOURS_PER_SEC;
-      if (t > DATA.times.length - 1) t = 0;
-      $('tslider').value = String(Math.round(t * 100));
+  try {
+    if (DATA) {
+      if (playing) {
+        t += dt * HOURS_PER_SEC;
+        if (t > DATA.times.length - 1) t = 0;
+        $('tslider').value = String(Math.round(t * 100));
+      }
+      drawParticles(dt, t);
+      drawCurParticles(dt);
+      if (needsField || Math.abs(t - lastDrawnT) > 0.008) {
+        drawField(t); lastDrawnT = t; needsField = false;
+        drawWaves(t);
+        refreshTimeLabel();
+      }
+      updateHud();
     }
-    drawParticles(dt, t);
-    drawCurParticles(dt);
-    if (needsField || Math.abs(t - lastDrawnT) > 0.008) {
-      drawField(t); lastDrawnT = t; needsField = false;
-      drawWaves(t);
-      refreshTimeLabel();
+  } catch (e) {
+    /* a single throwing frame must NEVER kill the animation loop —
+     * report once, keep animating */
+    if (!loop._err) {
+      loop._err = true;
+      try { showStatus('render error: ' + (e && e.message ? e.message : e), true); } catch (_) {}
     }
-    updateHud();
   }
   requestAnimationFrame(loop);
 }
@@ -767,9 +785,9 @@ $('play').onclick = () => {
   playing = !playing;
   $('play').textContent = playing ? '▶' : '❚❚';
 };
-$('fitbox').onclick = () => {
+$('fitbox') && ($('fitbox').onclick = () => {
   if (dataBounds) map.fitBounds(dataBounds, {padding: [24, 24]});
-};
+});
 $('tslider').oninput = (e) => { t = parseInt(e.target.value, 10) / 100; };
 map.on('mousemove', (e) => { cursorLL = e.latlng; });
 map.on('mouseout', () => { cursorLL = null; });
