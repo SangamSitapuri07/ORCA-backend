@@ -183,6 +183,7 @@ let ODATA = null, ODEMO = false, activeLayer = 'rh';
 let t = 0, playing = true, lastTs = 0, needsField = true, lastDrawnT = -1;
 let cursorLL = null, tinies = [];
 let dataBounds = null, coverBox = null;   // data coverage box + jump target
+let demoNagged = false;                   // one-shot "panned off demo data" notice
 let particles = [], curParticles = [], origin = {x: 0, y: 0}, scale = 1;
 
 const map = L.map('map', {zoomControl: true, attributionControl: true,
@@ -406,12 +407,14 @@ function onData(fitIt) {
   buildTinies();          /* tiny per-frame rasters for the active layer */
   buildLegend();
   updateBadge();
-  if (fitIt) {
+  /* fit exactly once at boot so the initial view shows the whole field;
+   * afterwards the user owns the view — refetches NEVER re-fit */
+  if (fitIt && !onData._booted) {
+    onData._booted = true;
     map.fitBounds([[DATA.lats[n - 1], DATA.lons[0]], [DATA.lats[0], DATA.lons[n - 1]]],
                   {padding: [24, 24]});
   }
-  /* dashed coverage box — always shows where the data lives; in demo
-   * mode, snap back if the current view doesn't touch it at all */
+  /* dashed coverage box — always shows where the data lives */
   dataBounds = L.latLngBounds([DATA.lats[n - 1], DATA.lons[0]],
                                [DATA.lats[0], DATA.lons[n - 1]]);
   if (coverBox) map.removeLayer(coverBox);
@@ -419,9 +422,6 @@ function onData(fitIt) {
                                       dashArray: '4 6', fill: false,
                                       interactive: false});
   coverBox.addTo(map);
-  if (DEMO && !map.getBounds().intersects(dataBounds) && !fitIt) {
-    map.fitBounds(dataBounds, {padding: [24, 24]});
-  }
   reproj(); respawn(); needsField = true;
 }
 
@@ -907,11 +907,18 @@ map.on('moveend', () => {
     loadGrid._deb = setTimeout(() => loadGrid(true), 900);
   }
   /* demo mode: if the user panned away from the covered box, say so
-   * instead of silently showing an empty map */
+   * ONCE instead of yanking the view back — they stay where they are;
+   * tap ⌖ to jump back to the data */
   if (DEMO && dataBounds) {
     if (!map.getBounds().intersects(dataBounds)) {
-      showStatus('no live fetch in this sandbox — demo data covers the dashed Kutch box · tap ⌖ to jump back', true);
-    } else { hideStatus(); }
+      if (!demoNagged) {
+        demoNagged = true;
+        showStatus('offline demo grid covers the dashed box (12° around Kutch / Arabian Sea) · tap ⌖ to jump back', true);
+      }
+    } else if (demoNagged) {
+      demoNagged = false;
+      hideStatus();
+    }
   }
 });
 $('tgRef').onchange = () => { needsField = true; };
