@@ -186,7 +186,8 @@ def test_endpoint_demo_and_page():
         assert j["demo"] and len(j["wh"][0]) == 81
         assert c.get("/api/v1/ocean/grid").status_code == 422
         h = c.get("/map").text
-        for probe in ("wavemark", "currents", "tgCur", "tgWaves", "tgSst", "hSea"):
+        for probe in ("wavemark", "currents", "tgCur", "tgWaves",
+                      'data-lyr="sst"', 'data-lyr="wave"', "hSea"):
             assert probe in h, probe
         js = c.get("/frontend/weather_map.js").text
         for probe in ("loadOcean", "sampleSea", "drawWaves", "drawCurParticles",

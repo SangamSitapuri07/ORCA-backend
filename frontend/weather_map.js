@@ -69,6 +69,104 @@ function colorForWave(h) {
           Math.round(a[2] + f * (b[2] - a[2])),
           Math.round(a[3] + f * (b[3] - a[3]))];
 }
+/* ── selectable field layers (zoom.earth-style picker) ── */
+const TEMP_PALETTE = [
+  [20, 0x21, 0x66, 0xAC], [24, 0x43, 0x93, 0xC3], [27, 0x92, 0xC5, 0xDE],
+  [29, 0xFD, 0xB8, 0x63], [32, 0xE0, 0x82, 0x14], [36, 0xB2, 0x18, 0x2B],
+];
+const WIND_KMH = [
+  [0, 0x1B, 0x4F, 0x72], [10, 0x2E, 0x86, 0xC1], [20, 0x48, 0xC9, 0xB0],
+  [30, 0xF4, 0xD0, 0x3F], [40, 0xE6, 0x7E, 0x22], [55, 0xB0, 0x3A, 0x2E], [75, 0x64, 0x1E, 0x16],
+];
+const GUST_KMH = [
+  [10, 0x1B, 0x4F, 0x72], [20, 0x2E, 0x86, 0xC1], [30, 0x48, 0xC9, 0xB0],
+  [40, 0xF4, 0xD0, 0x3F], [55, 0xE6, 0x7E, 0x22], [70, 0xB0, 0x3A, 0x2E], [90, 0x64, 0x1E, 0x16],
+];
+const RAIN_PALETTE = [
+  [0.05, 0xA3, 0xD9, 0x77], [0.5, 0xF4, 0xD0, 0x3F], [1.5, 0xE6, 0x7E, 0x22],
+  [3, 0xB0, 0x3A, 0x2E], [6, 0x7B, 0x1F, 0xA2], [12, 0x4A, 0x14, 0x8C],
+];
+const CLOUD_PALETTE = [
+  [20, 0x5D, 0x6D, 0x7E], [40, 0x85, 0x92, 0x9E], [60, 0xAA, 0xB7, 0xB8],
+  [80, 0xD5, 0xDB, 0xDB], [100, 0xF8, 0xF9, 0xF9],
+];
+const CURR_PALETTE = [
+  [0, 0x1B, 0x4F, 0x72], [0.2, 0x2E, 0x86, 0xC1], [0.4, 0x48, 0xC9, 0xB0],
+  [0.6, 0xF4, 0xD0, 0x3F], [0.8, 0xE6, 0x7E, 0x22], [1.2, 0xB0, 0x3A, 0x2E],
+];
+/* generic palette sampler — [1,r,g,b] (1 = valid), [0,…] for null */
+function palColor(pal, v) {
+  if (v === null || v === undefined || isNaN(v)) return [0, 0, 0, 0];
+  const vv = Math.max(pal[0][0], Math.min(pal[pal.length - 1][0], v));
+  let i = 0;
+  while (i < pal.length - 2 && vv > pal[i + 1][0]) i++;
+  const a = pal[i], b = pal[i + 1];
+  const f = (vv - a[0]) / (b[0] - a[0] || 1);
+  return [1, Math.round(a[1] + f * (b[1] - a[1])),
+          Math.round(a[2] + f * (b[2] - a[2])),
+          Math.round(a[3] + f * (b[3] - a[3]))];
+}
+/* weather frame index → nearest ODATA wave frame (both hourly UTC) */
+function waveFrameFor(f) {
+  if (!ODATA || !ODATA.times.length) return 0;
+  const span = Math.max(1, (DATA ? DATA.times.length : 8) - 1);
+  return Math.max(0, Math.min(ODATA.times.length - 1,
+      Math.round(f * (ODATA.times.length - 1) / span)));
+}
+const LAYERS = [
+  {id: 'rh',    label: 'humidity %',  src: 'w', title: 'humidity %',  pal: PALETTE,
+   get: (d, f, p) => d.rh[f][p]},
+  {id: 'temp',  label: 'temperature', src: 'w', title: 'temp °C',     pal: TEMP_PALETTE,
+   get: (d, f, p) => d.temp[f][p]},
+  {id: 'wind',  label: 'wind speed',  src: 'w', title: 'wind km/h',   pal: WIND_KMH,
+   get: (d, f, p) => (d.u[f][p] === null || d.v[f][p] === null) ?
+       null : Math.hypot(d.u[f][p], d.v[f][p]) * 3.6},
+  {id: 'gust',  label: 'wind gusts',  src: 'w', title: 'gusts km/h',  pal: GUST_KMH,
+   get: (d, f, p) => d.gust ? d.gust[f][p] : null},
+  {id: 'rain',  label: 'rain',        src: 'w', title: 'rain mm/h',   pal: RAIN_PALETTE,
+   get: (d, f, p) => d.pr ? d.pr[f][p] : null, cut: 0.05},
+  {id: 'cloud', label: 'clouds',      src: 'w', title: 'cloud %',     pal: CLOUD_PALETTE,
+   get: (d, f, p) => d.cloud ? d.cloud[f][p] : null, cut: 10},
+  {id: 'sst',   label: 'sea temp',    src: 'o', title: 'sea temp °C', pal: SST_PALETTE,
+   get: (d, f, p) => d.sst ? d.sst[p] : null},
+  {id: 'wave',  label: 'waves',       src: 'o', title: 'wave m',      pal: WAVE_PALETTE,
+   get: (d, f, p) => d.wh ? d.wh[waveFrameFor(f)][p] : null},
+  {id: 'cur',   label: 'currents',    src: 'o', title: 'current m/s', pal: CURR_PALETTE,
+   get: (d, f, p) => (d.cu === null || d.cv === null || d.cu[p] === null ||
+                      d.cv[p] === null) ? null : Math.hypot(d.cu[p], d.cv[p])},
+];
+/* build the per-frame tiny rasters for the ACTIVE layer */
+function buildTinies() {
+  tinies = [];
+  if (!DATA) return;
+  const L = LAYERS.find((l) => l.id === activeLayer);
+  if (!L) return;
+  if (L.src === 'o' && !ODATA) return;      /* sea layer before ocean feed lands */
+  const d = L.src === 'o' ? ODATA : DATA;
+  const n = d.grid_n, F = DATA.times.length;
+  for (let f = 0; f < F; f++) {
+    const cv = document.createElement('canvas');
+    cv.width = n; cv.height = n;
+    const c2 = cv.getContext('2d');
+    const img = c2.createImageData(n, n);
+    for (let p = 0; p < n * n; p++) {
+      const v = L.get(d, f, p);
+      const col = (v === null || v === undefined) ? [0, 0, 0, 0] :
+          ((L.cut !== undefined && v < L.cut) ? [0, 0, 0, 0] : palColor(L.pal, v));
+      img.data[p * 4] = col[1]; img.data[p * 4 + 1] = col[2];
+      img.data[p * 4 + 2] = col[3]; img.data[p * 4 + 3] = col[0] ? 235 : 0;
+    }
+    c2.putImageData(img, 0, 0);
+    tinies.push(cv);
+  }
+}
+function selectLayer(id) {
+  activeLayer = id;
+  document.querySelectorAll('#layers .lyr').forEach(
+      (b) => b.classList.toggle('on', b.dataset.lyr === id));
+  buildTinies(); buildLegend(); needsField = true;
+}
+
 const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
                  'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
 const IST_MIN = 330;                       // UTC + 5:30
@@ -81,7 +179,7 @@ const CITIES = [['Bhuj', 23.24, 69.67], ['Dwarka', 22.24, 68.97],
 
 /* ── state ── */
 let DATA = null, DEMO = false, loading = false;
-let ODATA = null, ODEMO = false, tinySst = null;
+let ODATA = null, ODEMO = false, activeLayer = 'rh';
 let t = 0, playing = true, lastTs = 0, needsField = true, lastDrawnT = -1;
 let cursorLL = null, tinies = [];
 let particles = [], curParticles = [], origin = {x: 0, y: 0}, scale = 1;
@@ -201,21 +299,9 @@ async function loadOcean(q) {
 
 function onOceanData() {
   if (!ODATA) return;
-  /* single tiny raster: SST colours where the satellite sees water,
-   * transparent on land (drawn OVER the humidity wash) */
-  const n = ODATA.grid_n;
-  const cv = document.createElement('canvas');
-  cv.width = n; cv.height = n;
-  const c2 = cv.getContext('2d');
-  const img = c2.createImageData(n, n);
-  for (let p = 0; p < n * n; p++) {
-    const col = colorForSst(ODATA.sst[p]);
-    img.data[p * 4] = col[1]; img.data[p * 4 + 1] = col[2];
-    img.data[p * 4 + 2] = col[3]; img.data[p * 4 + 3] = col[0] ? 225 : 0;
-  }
-  c2.putImageData(img, 0, 0);
-  tinySst = cv;
   curRespawn(); needsField = true;
+  const L = LAYERS.find((l) => l.id === activeLayer);
+  if (L && L.src === 'o') buildTinies();   /* selected sea layer can paint now */
   updateBadge(); buildLegend();
 }
 
@@ -241,21 +327,7 @@ function onData(fitIt) {
   const n = DATA.grid_n, F = DATA.times.length;
   t = Math.min(t, F - 1);
   $('tslider').max = String((F - 1) * 100);
-  /* tiny per-frame colour rasters */
-  tinies = [];
-  for (let f = 0; f < F; f++) {
-    const cv = document.createElement('canvas');
-    cv.width = n; cv.height = n;
-    const cx = cv.getContext('2d');
-    const img = cx.createImageData(n, n);
-    for (let p = 0; p < n * n; p++) {
-      const col = colorFor(DATA.rh[f][p]);
-      img.data[p * 4] = col[1]; img.data[p * 4 + 1] = col[2];
-      img.data[p * 4 + 2] = col[3]; img.data[p * 4 + 3] = col[0] ? 235 : 0;
-    }
-    cx.putImageData(img, 0, 0);
-    tinies.push(cv);
-  }
+  buildTinies();          /* tiny per-frame rasters for the active layer */
   buildLegend();
   updateBadge();
   if (fitIt) {
@@ -335,7 +407,7 @@ function drawField(tt) {
   const cellX = wpx / (n - 1), cellY = hpx / (n - 1);
   const rect = [p0.x - cellX / 2, p0.y - cellY / 2, wpx + cellX, hpx + cellY];
 
-  if ($('tgHum').checked) {
+  if (tinies.length) {                     /* active-layer wash (picker) */
     const fA = Math.max(0, Math.min(F - 1, Math.floor(tt)));
     const fB = Math.min(fA + 1, F - 1);
     const frac = tt - fA;
@@ -346,8 +418,6 @@ function drawField(tt) {
       fx.drawImage(tinies[fB], ...rect);
       fx.globalAlpha = 1;
     }
-    /* satellite SST paints OVER water cells only (transparent on land) */
-    if ($('tgSst').checked && tinySst) fx.drawImage(tinySst, ...rect);
   }
   if ($('tgRef').checked) drawRef(p0, p1);
   fx.strokeStyle = 'rgba(150,180,205,0.5)'; fx.lineWidth = 1.5;
@@ -535,7 +605,8 @@ function updateHud() {
   if (!DATA) return;
   if (!cursorLL) {
     $('hPos').textContent = $('hRh').textContent = $('hWind').textContent =
-      $('hTemp').textContent = '—';
+      $('hTemp').textContent = $('hGust').textContent =
+      $('hRain').textContent = '—';
     $('hHint').textContent = 'move the cursor over the map';
     return;
   }
@@ -552,6 +623,11 @@ function updateHud() {
   } else $('hWind').textContent = 'outside grid';
   const tp = sampleField(lat, lng, t, 'temp');
   $('hTemp').textContent = tp === null ? 'outside grid' : tp.toFixed(1) + ' °C';
+  const gu = sampleField(lat, lng, t, 'gust');
+  $('hGust').textContent = gu === null ? '—' : gu.toFixed(0) + ' km/h';
+  const rn = sampleField(lat, lng, t, 'pr');
+  $('hRain').textContent = rn === null ? '—' :
+      (rn < 0.05 ? 'dry' : rn.toFixed(1) + ' mm/h');
   /* sea readout: SST, current (toward), waves (from) */
   if (ODATA) {
     const sstv = sampleSea(lat, lng, 0, 'sst');
@@ -610,22 +686,16 @@ function refreshTimeLabel() {
 
 /* ── legend ── */
 function buildLegend() {
-  const useSst = $('tgSst') && $('tgSst').checked;
-  let stops;
-  if (useSst) {
-    const lo = SST_PALETTE[0][0], hi = SST_PALETTE[SST_PALETTE.length - 1][0];
-    stops = SST_PALETTE.map((p) =>
-      [((p[0] - lo) / (hi - lo) * 100).toFixed(0),
-       'rgb(' + p[1] + ',' + p[2] + ',' + p[3] + ')']);
-  } else {
-    stops = (DATA && DATA.legend && DATA.legend.length) ?
-        DATA.legend.map((s) => [s.value, s.color]) : PALETTE.map((p) => [p[0],
-          'rgb(' + p[1] + ',' + p[2] + ',' + p[3] + ')']);
-  }
-  $('legendgrad').style.background =
-      'linear-gradient(90deg,' + stops.map((s) => s[1] + ' ' + s[0] + '%').join(',') + ')';
+  const L = LAYERS.find((l) => l.id === activeLayer) || LAYERS[0];
+  const stops = (L.id === 'rh' && DATA && DATA.legend && DATA.legend.length) ?
+      DATA.legend.map((s) => [s.value, s.color]) :
+      L.pal.map((p) => [p[0], 'rgb(' + p[1] + ',' + p[2] + ',' + p[3] + ')']);
+  const lo = stops[0][0], hi = stops[stops.length - 1][0];
+  $('legendgrad').style.background = 'linear-gradient(90deg,' +
+      stops.map((s) => s[1] + ' ' + (((s[0] - lo) / (hi - lo || 1)) * 100).toFixed(1) + '%')
+          .join(',') + ')';
   $('legendticks').innerHTML = stops.map((s) => '<span>' + s[0] + '</span>').join('');
-  $('legendtitle').textContent = useSst ? 'sea temp °C' : 'humidity %';
+  $('legendtitle').textContent = L.title;
 }
 
 /* ── status ── */
@@ -679,9 +749,10 @@ map.on('moveend', () => {
     loadGrid._deb = setTimeout(() => loadGrid(true), 900);
   }
 });
-for (const id of ['tgHum', 'tgRef', 'tgSst']) $(id).onchange = () => {
-  needsField = true; buildLegend();
-};
+$('tgRef').onchange = () => { needsField = true; };
+document.querySelectorAll('#layers .lyr').forEach((b) => {
+  b.onclick = () => selectLayer(b.dataset.lyr);
+});
 $('tgCur').onchange = () => {
   cx.clearRect(0, 0, cC.clientWidth, cC.clientHeight); curRespawn();
 };

@@ -32,7 +32,8 @@ from pipeline.ttlcache import cached
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 USER_AGENT = "ORCA-ps176/0.1 (SIH 2026)"
 MODEL = "icon_global"
-HOURLY = "wind_speed_10m,wind_direction_10m,relative_humidity_2m,temperature_2m"
+HOURLY = ("wind_speed_10m,wind_direction_10m,relative_humidity_2m,temperature_2m,"
+          "precipitation,wind_gusts_10m,cloud_cover")
 FRAMES_MAX = 25          # 24 h ahead + current hour
 GRID_N_MAX = 16          # 256 points — still one call
 SPAN_MAX_DEG = 30.0
@@ -111,6 +112,9 @@ def get_weather_grid(
         v: list[list] = [[] for _ in range(n_f)]
         rh: list[list] = [[] for _ in range(n_f)]
         temp: list[list] = [[] for _ in range(n_f)]
+        pr: list[list] = [[] for _ in range(n_f)]
+        gust: list[list] = [[] for _ in range(n_f)]
+        cloud: list[list] = [[] for _ in range(n_f)]
         for row in rows:
             for h in range(n_f):
                 cu, cv = _uv(_pick(row, h, "wind_speed_10m"),
@@ -121,6 +125,12 @@ def get_weather_grid(
                 t_ = _pick(row, h, "temperature_2m")
                 rh[h].append(round(r_) if r_ is not None else None)
                 temp[h].append(round(t_, 1) if t_ is not None else None)
+                p_ = _pick(row, h, "precipitation")
+                g_ = _pick(row, h, "wind_gusts_10m")
+                c_ = _pick(row, h, "cloud_cover")
+                pr[h].append(round(p_, 2) if p_ is not None else None)
+                gust[h].append(round(g_, 1) if g_ is not None else None)
+                cloud[h].append(round(c_) if c_ is not None else None)
 
         return {
             "type": "weather_grid",
@@ -136,6 +146,7 @@ def get_weather_grid(
             "lats": [round(p[0], 4) for p in pairs[::grid_n]],   # descending (N→S)
             "lons": [round(p[1], 4) for p in pairs[:grid_n]],    # ascending (W→E)
             "u": u, "v": v, "rh": rh, "temp": temp,
+            "pr": pr, "gust": gust, "cloud": cloud,
             "legend": legend(),
         }
 

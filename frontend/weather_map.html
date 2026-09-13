@@ -35,6 +35,18 @@
   .badge.live .dot { animation: pulse 1.6s infinite; }
   @keyframes pulse { 0%,100% {opacity: 1;} 50% {opacity: 0.25;} }
 
+  #layers { top: 122px; left: 12px; padding: 8px; display: flex;
+            flex-direction: column; gap: 3px; }
+  #layers .lyrhead { font-size: 9.5px; color: #7e93a6; text-transform: uppercase;
+                     letter-spacing: 1.2px; margin: 1px 3px 4px; }
+  #layers button.lyr { background: rgba(255,255,255,0.05); color: #c6d6e2;
+                       border: 1px solid rgba(255,255,255,0.14); border-radius: 6px;
+                       padding: 3px 10px; font: 11.5px/1.5 system-ui, sans-serif;
+                       cursor: pointer; text-align: left; }
+  #layers button.lyr:hover { background: rgba(255,255,255,0.15); }
+  #layers button.lyr.on { background: #2e9e8f; color: #04211d;
+                          border-color: #2e9e8f; font-weight: 700; }
+
   #hud { top: 12px; right: 12px; padding: 9px 13px; font-size: 12px; min-width: 205px; }
   #hud .row { display: flex; justify-content: space-between; gap: 14px; line-height: 1.55; }
   #hud .k { color: #9db4c8; }
@@ -87,15 +99,30 @@
 
 <header class="panel">
   <h1>ORCA Live Weather Map — Kutch &amp; Saurashtra</h1>
-  <div class="sub">humidity · wind · satellite currents · waves · sea temp — DWD ICON + NOAA + Open-Meteo Marine</div>
+  <div class="sub">9 live layers — wind · gusts · rain · clouds · temp · humidity · currents · waves · sea temp</div>
   <span class="badge live" id="modeBadge"><span class="dot"></span>LOADING…</span>
 </header>
+
+<nav id="layers" class="panel">
+  <div class="lyrhead">layers</div>
+  <button class="lyr on" data-lyr="rh">humidity %</button>
+  <button class="lyr" data-lyr="temp">temperature</button>
+  <button class="lyr" data-lyr="wind">wind speed</button>
+  <button class="lyr" data-lyr="gust">wind gusts</button>
+  <button class="lyr" data-lyr="rain">rain</button>
+  <button class="lyr" data-lyr="cloud">clouds</button>
+  <button class="lyr" data-lyr="sst">sea temp</button>
+  <button class="lyr" data-lyr="wave">waves</button>
+  <button class="lyr" data-lyr="cur">currents</button>
+</nav>
 
 <div id="hud" class="panel">
   <div class="row"><span class="k">Position</span><span class="v" id="hPos">—</span></div>
   <div class="row"><span class="k">Humidity (2 m)</span><span class="v" id="hRh">—</span></div>
   <div class="row"><span class="k">Wind (10 m)</span><span class="v" id="hWind">—</span></div>
   <div class="row"><span class="k">Temperature</span><span class="v" id="hTemp">—</span></div>
+  <div class="row"><span class="k">Gusts</span><span class="v" id="hGust">—</span></div>
+  <div class="row"><span class="k">Rain</span><span class="v" id="hRain">—</span></div>
   <div class="row"><span class="k">Sea (satellite)</span><span class="v" id="hSea">—</span></div>
   <div class="hint" id="hHint">move the cursor over the map</div>
 </div>
@@ -117,12 +144,10 @@
       </div>
     </div>
     <div class="toggles">
-      <label><input type="checkbox" id="tgHum" checked> humidity</label>
       <label><input type="checkbox" id="tgWind" checked> wind</label>
       <label><input type="checkbox" id="tgRef" checked> grid</label>
       <label><input type="checkbox" id="tgCur" checked> currents</label>
       <label><input type="checkbox" id="tgWaves" checked> waves</label>
-      <label><input type="checkbox" id="tgSst"> sea temp</label>
       <span class="bmsep"></span>
       <span class="bms">
         <button class="bm" data-bm="satellite">Satellite</button>

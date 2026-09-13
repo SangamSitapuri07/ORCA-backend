@@ -18,7 +18,7 @@ import pytest
 
 from pipeline import weather_grid as wg
 from pipeline.weather_demo_snapshot import (
-    _D, _RH, _S, _T, TIMES, demo_payload,
+    _CL, _D, _G, _PR, _RH, _S, _T, TIMES, demo_payload,
 )
 
 
@@ -133,12 +133,19 @@ def test_params_are_clamped():
 
 def test_demo_snapshot_shapes_and_ranges():
     assert len(_S) == len(_D) == len(_RH) == len(_T) == 81
-    assert all(len(a) == 8 for a in _S + _D + _RH + _T)
+    assert len(_PR) == len(_G) == len(_CL) == 81
+    assert all(len(a) == 8 for a in _S + _D + _RH + _T + _PR + _G + _CL)
     assert TIMES[0] == "2026-09-13T07:00" and TIMES[-1] == "2026-09-13T14:00"
     assert all(0 <= x <= 40 for a in _S for x in a)
     assert all(0 <= x <= 360 for a in _D for x in a)
     assert all(20 <= x <= 100 for a in _RH for x in a)
     assert all(20 <= x <= 40 for a in _T for x in a)
+    # relayed verbatim 2026-09-13: rain cell in the SE, gusts > speeds, clouds
+    assert all(0 <= x <= 3 for a in _PR for x in a)
+    assert all(5 <= x <= 55 for a in _G for x in a)
+    assert all(0 <= x <= 100 for a in _CL for x in a)
+    assert any(x >= 2.0 for a in _PR for x in a)          # real convective cell
+    assert max(x for a in _G for x in a) > max(x for a in _S for x in a)
 
 
 def test_demo_payload_contract():
@@ -151,6 +158,11 @@ def test_demo_payload_contract():
     spd = math.hypot(d["u"][0][0], d["v"][0][0]) * 3.6
     dr = (270 - math.degrees(math.atan2(d["v"][0][0], d["u"][0][0]))) % 360
     assert abs(spd - _S[0][0]) < 0.05 and abs(dr - _D[0][0]) < 1.0
+    # new picker fields, transposed [frame][point] like u/v/rh/temp
+    for k, raw in (("pr", _PR), ("gust", _G), ("cloud", _CL)):
+        assert len(d[k]) == 8 and len(d[k][0]) == 81
+        assert d[k][3][40] == raw[40][3]
+    assert d["pr"][7][4] == 0.9 and d["gust"][0][0] == 41.8 and d["cloud"][0][0] == 33
 
 
 def test_demo_snapshot_crosschecks_earlier_transcription():
@@ -180,5 +192,13 @@ def test_endpoint_demo_and_page():
         assert c.get("/api/v1/weather/grid").status_code == 422  # coords required
         p = c.get("/map")
         assert p.status_code == 200 and "ORCA Live Weather Map" in p.text
+        for k in ("pr", "gust", "cloud"):
+            assert len(j[k]) == 8 and len(j[k][0]) == 81, k
+        assert "layers" in p.text and 'data-lyr="rain"' in p.text
+        assert 'data-lyr="gust"' in p.text and 'data-lyr="cur"' in p.text
+        assert "hGust" in p.text and "hRain" in p.text
+        assert "tgHum" not in p.text and "tgSst" not in p.text   # moved to rail
         js = c.get("/frontend/weather_map.js")
         assert js.status_code == 200 and "weather/grid" in js.text
+        for probe in ("selectLayer", "buildTinies", "palColor", "LAYERS"):
+            assert probe in js.text, probe
