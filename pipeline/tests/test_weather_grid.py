@@ -206,4 +206,14 @@ def test_endpoint_demo_and_page():
         # the particle animation silently never drew anything
         assert "p.wy < by0 || p.wy > by1" in js.text
         assert "p.wy < by1 || p.wy > by0" not in js.text
+        # the demo badge must derive its timestamp from the payload, not
+        # hardcode a window (a stale "07Z" badge made fresh data look old)
+        assert "07Z" not in js.text and "when(DATA.fetched_at)" in js.text
+        # returning tabs must always revalidate the JS (no stale particle
+        # bug surviving a browser heuristic cache)
+        assert js.headers.get("cache-control") == "no-cache"
+        # coverage UX: dashed data box, jump-back button, out-of-view nudge
+        assert "fitbox" in c.get("/map").text
+        for probe in ("dataBounds", "coverBox", "dashArray"):
+            assert probe in js.text, probe
         assert "click to pin" in c.get("/map").text

@@ -685,6 +685,19 @@ except Exception:  # pragma: no cover — never block API startup on static
     pass
 
 
+@app.middleware("http")
+async def _map_assets_always_revalidate(request, call_next):
+    """/map and its JS must never be served from browser heuristic cache —
+    a returning tab would otherwise keep running an old weather_map.js
+    (e.g. the pre-particle-fix build) and look broken/stale. `no-cache`
+    still allows 304 revalidation, so it stays cheap."""
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/map" or path.startswith("/frontend"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 # ── OSM tile proxy: real map tiles for the 3D ocean surface ────────
 #
 # The 3D view drapes REAL OpenStreetMap tiles onto its animated surface

@@ -182,6 +182,7 @@ let DATA = null, DEMO = false, loading = false;
 let ODATA = null, ODEMO = false, activeLayer = 'rh';
 let t = 0, playing = true, lastTs = 0, needsField = true, lastDrawnT = -1;
 let cursorLL = null, tinies = [];
+let dataBounds = null, coverBox = null;   // data coverage box + jump target
 let particles = [], curParticles = [], origin = {x: 0, y: 0}, scale = 1;
 
 const map = L.map('map', {zoomControl: true, attributionControl: true,
@@ -307,18 +308,30 @@ function onOceanData() {
 
 function updateBadge() {
   const badge = $('modeBadge');
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+               'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const when = (s) => {          /* "2026-09-13T16:10:00+00:00" -> "13 Sep 16:10 UTC" */
+    if (!s) return '';
+    const d = new Date(s);
+    return d.getUTCDate() + ' ' + MON[d.getUTCMonth()] + ' ' +
+        String(d.getUTCHours()).padStart(2, '0') + ':' +
+        String(d.getUTCMinutes()).padStart(2, '0') + ' UTC';
+  };
+  const w = DATA ? when(DATA.fetched_at) : '';
   if (DEMO && ODEMO) {
     badge.className = 'badge demo';
-    badge.innerHTML = '<span class="dot"></span>DEMO — REAL SNAPSHOTS · ICON 13 SEP 07Z · CURRENTS 10Z · SST 11Z · WAVES 13 SEP 08Z';
+    badge.innerHTML = '<span class="dot"></span>DEMO — REAL DATA · DWD ICON ' + w +
+        ' · NOAA CURRENTS/SST/WAVES 10–13 SEP';
   } else if (DEMO) {
     badge.className = 'badge demo';
-    badge.innerHTML = '<span class="dot"></span>LIVE OCEAN · WEATHER DEMO (ICON 13 SEP 07Z)';
+    badge.innerHTML = '<span class="dot"></span>LIVE OCEAN · WEATHER DEMO (DWD ICON ' + w + ')';
   } else if (ODEMO) {
     badge.className = 'badge demo';
-    badge.innerHTML = '<span class="dot"></span>LIVE ICON · OCEAN DEMO (13 SEP SNAPSHOTS)';
+    badge.innerHTML = '<span class="dot"></span>LIVE ICON · OCEAN DEMO (NOAA SNAPSHOTS 10–13 SEP)';
   } else if (DATA) {
     badge.className = 'badge live';
-    badge.innerHTML = '<span class="dot"></span>LIVE · DWD ICON + NOAA SATELLITE · ' + DATA.fetched_at.slice(11, 16) + ' UTC';
+    badge.innerHTML = '<span class="dot"></span>LIVE · DWD ICON + NOAA SATELLITE · ' +
+        DATA.fetched_at.slice(11, 16) + ' UTC';
   }
 }
 
@@ -333,6 +346,18 @@ function onData(fitIt) {
   if (fitIt) {
     map.fitBounds([[DATA.lats[n - 1], DATA.lons[0]], [DATA.lats[0], DATA.lons[n - 1]]],
                   {padding: [24, 24]});
+  }
+  /* dashed coverage box — always shows where the data lives; in demo
+   * mode, snap back if the current view doesn't touch it at all */
+  dataBounds = L.latLngBounds([DATA.lats[n - 1], DATA.lons[0]],
+                               [DATA.lats[0], DATA.lons[n - 1]]);
+  if (coverBox) map.removeLayer(coverBox);
+  coverBox = L.rectangle(dataBounds, {color: '#fff', weight: 1, opacity: 0.55,
+                                      dashArray: '4 6', fill: false,
+                                      interactive: false});
+  coverBox.addTo(map);
+  if (DEMO && !map.getBounds().intersects(dataBounds) && !fitIt) {
+    map.fitBounds(dataBounds, {padding: [24, 24]});
   }
   reproj(); respawn(); needsField = true;
 }
@@ -459,8 +484,12 @@ function respawn() {
   const n = DATA.grid_n;
   const bx0 = mX(DATA.lons[0]), bx1 = mX(DATA.lons[n - 1]);
   const by0 = mY(DATA.lats[0]), by1 = mY(DATA.lats[n - 1]);
-  const count = Math.max(350, Math.min(2400,
-      Math.round((bx1 - bx0) * (by1 - by0) / 420 / Math.max(1, scale / 32768))));
+  /* density: ~1 particle per 170 px² of grid box (scaled by zoom),
+   * bounded so tiny boxes never get overcrowded */
+  let count = Math.round((bx1 - bx0) * (by1 - by0) / 170 /
+                         Math.max(1, scale / 32768));
+  count = Math.max(500, Math.min(2600, count));
+  count = Math.min(count, Math.round((bx1 - bx0) * (by1 - by0) / 6));
   particles = [];
   for (let i = 0; i < count; i++) {
     particles.push({
@@ -474,7 +503,7 @@ function respawn() {
 function drawParticles(dt, tt) {
   const W = pC.clientWidth, H = pC.clientHeight;
   px.globalCompositeOperation = 'destination-out';
-  px.fillStyle = 'rgba(0,0,0,0.07)';
+  px.fillStyle = 'rgba(0,0,0,0.045)';
   px.fillRect(0, 0, W, H);
   px.globalCompositeOperation = 'source-over';
   if (!DATA || !$('tgWind').checked) return;
@@ -483,8 +512,8 @@ function drawParticles(dt, tt) {
   const bx0 = mX(DATA.lons[0]), bx1 = mX(DATA.lons[n - 1]);
   const by0 = mY(DATA.lats[0]), by1 = mY(DATA.lats[n - 1]);
   const pxPerM = scale / 40075016.686;
-  px.strokeStyle = 'rgba(255,255,255,0.5)';
-  px.lineWidth = 1.15;
+  px.strokeStyle = 'rgba(255,255,255,0.62)';
+  px.lineWidth = 1.35;
   px.beginPath();
   for (const p of particles) {
     const lat = wLat(p.wy);
@@ -516,8 +545,8 @@ function curRespawn() {
   const n = ODATA.grid_n;
   const bx0 = mX(ODATA.lons[0]), bx1 = mX(ODATA.lons[n - 1]);
   const by0 = mY(ODATA.lats[0]), by1 = mY(ODATA.lats[n - 1]);
-  const count = Math.max(120, Math.min(900,
-      Math.round((bx1 - bx0) * (by1 - by0) / 1400)));
+  const count = Math.max(200, Math.min(1200,
+      Math.round((bx1 - bx0) * (by1 - by0) / 700)));
   for (let i = 0; i < count; i++) {
     curParticles.push({wx: bx0 + Math.random() * (bx1 - bx0),
                        wy: by0 + Math.random() * (by1 - by0),
@@ -535,8 +564,8 @@ function drawCurParticles(dt) {
   const bx0 = mX(ODATA.lons[0]), bx1 = mX(ODATA.lons[n - 1]);
   const by0 = mY(ODATA.lats[0]), by1 = mY(ODATA.lats[n - 1]);
   const pxPerM = scale / 40075016.686;
-  cx.strokeStyle = 'rgba(0,229,255,0.55)';
-  cx.lineWidth = 1.3;
+  cx.strokeStyle = 'rgba(0,229,255,0.65)';
+  cx.lineWidth = 1.45;
   cx.beginPath();
   for (const p of curParticles) {
     const lat = wLat(p.wy), lon = wLon(p.wx);
@@ -738,6 +767,9 @@ $('play').onclick = () => {
   playing = !playing;
   $('play').textContent = playing ? '▶' : '❚❚';
 };
+$('fitbox').onclick = () => {
+  if (dataBounds) map.fitBounds(dataBounds, {padding: [24, 24]});
+};
 $('tslider').oninput = (e) => { t = parseInt(e.target.value, 10) / 100; };
 map.on('mousemove', (e) => { cursorLL = e.latlng; });
 map.on('mouseout', () => { cursorLL = null; });
@@ -768,6 +800,13 @@ map.on('moveend', () => {
   if (!DEMO && !loading) {
     clearTimeout(loadGrid._deb);
     loadGrid._deb = setTimeout(() => loadGrid(true), 900);
+  }
+  /* demo mode: if the user panned away from the covered box, say so
+   * instead of silently showing an empty map */
+  if (DEMO && dataBounds) {
+    if (!map.getBounds().intersects(dataBounds)) {
+      showStatus('no live fetch in this sandbox — demo data covers the dashed Kutch box · tap ⌖ to jump back', true);
+    } else { hideStatus(); }
   }
 });
 $('tgRef').onchange = () => { needsField = true; };
