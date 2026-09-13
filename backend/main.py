@@ -231,8 +231,12 @@ def _validate_date(d: str | None) -> None:
 
 # ── Health & metadata ──
 
-@app.get("/")
-def root() -> dict[str, Any]:
+@app.get("/api")
+def api_info() -> dict[str, Any]:
+    return _api_info()
+
+
+def _api_info() -> dict[str, Any]:
     return {
         "service": "ORCA — Marine Intelligence API",
         "version": "0.2.0",
@@ -246,6 +250,9 @@ def root() -> dict[str, Any]:
             "/api/v1/zones",
             "/api/v1/agents",
             "/api/v1/advisory",
+            "/map (live weather map)",
+            "/api/v1/weather/grid (animation feed)",
+            "/api/v1/humidity",
             "/api/v1/layers",
             "/api/v1/alerts",
             "POST /api/v1/alerts/simulate",
@@ -257,6 +264,13 @@ def root() -> dict[str, Any]:
             "WS /ws/chat",
         ],
     }
+
+@app.get("/", include_in_schema=False)
+def root():
+    """Preview/browser landing: go straight to the live weather map."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("/map", status_code=307)
+
 
 
 def _git_commit() -> str:
@@ -619,7 +633,7 @@ def weather_grid(
 def weather_map_page():
     """The interactive animated weather map (wind particles + humidity
     colours + time slider) — served first-party, no build step."""
-    from fastapi.responses import FileResponse
+    from fastapi.responses import FileResponse, RedirectResponse
     root = Path(__file__).resolve().parent.parent
     return FileResponse(str(root / "frontend" / "weather_map.html"),
                         media_type="text/html")
@@ -907,7 +921,7 @@ def live_stats() -> dict[str, Any]:
 def osm_tile(z: int, x: int, y: int):
     """Cached OpenStreetMap raster tile (PNG)."""
     import urllib.request
-    from fastapi.responses import FileResponse
+    from fastapi.responses import FileResponse, RedirectResponse
 
     n = 1 << z if 0 <= z <= 19 else 0
     if not n or not (0 <= x < n and 0 <= y < n):
