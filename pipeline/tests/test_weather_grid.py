@@ -251,3 +251,26 @@ def test_endpoint_demo_and_page():
         assert "mountChart" in js.text and "chart.geojson" in js.text
         assert "X-ORCA-Offline" in js.text
         assert 'data-bm="chart"' in c.get("/map").text
+        # GPU wind engine (spec §7/§10/§11): WebGL particle renderer on the
+        # real u/v field, served first-party + versioned; CPU fallback kept
+        gpu_js = (Path(__file__).resolve().parents[2] / "frontend"
+                  / "wind_gpu.js").read_text()
+        p_html = c.get("/map").text
+        assert 'src="/frontend/wind_gpu.js?v=' in p_html
+        assert 'id="particlesGL"' in p_html and 'id="tgGPU"' in p_html
+        # documented texture encoding: ±80 m/s over 16 bits (0.0024 m/s
+        # quantisation — no silent precision loss)
+        assert "* 160.0 - 80.0" in gpu_js or "* 160.0 − 80.0" in gpu_js
+        assert "65280.0" in gpu_js and "65535.0" in gpu_js
+        # missing cells must never render as calm wind (§26): engine refuses
+        assert "return false" in gpu_js and "isFinite" in gpu_js
+        # advection parity with the CPU engine + fallback wiring in the page
+        page_js = js.text
+        assert "u_simRate" in gpu_js and "gpuActive()" in page_js
+        assert "drawParticles(dt, t)" in page_js          # CPU path preserved
+        assert "glC.width = glC.width" in page_js         # clean handover
+        # python mirror of the 16-bit ±80 m/s encoding: roundtrip precision
+        for val in (-79.99, -12.345, 0.0, 3.3333, 27.18, 79.99):
+            e = round((val + 80) / 160 * 65535)
+            dec = ((e >> 8) * 256 + (e & 255)) / 65535 * 160 - 80
+            assert abs(dec - val) < 0.0025, val

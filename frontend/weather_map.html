@@ -62,6 +62,8 @@
           display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
   #play:hover { background: rgba(46,158,143,0.32); }
   .bmsep { width: 1px; align-self: stretch; background: var(--line); margin: 2px 2px; }
+  #windSpd { background: rgba(255,255,255,0.06); color: #cfd8dc; border: 1px solid var(--line);
+             border-radius: 6px; font-size: 10px; padding: 1px 2px; margin-left: 4px; }
   .bms { display: flex; }
   .bm { background: rgba(255,255,255,0.06); color: #cfd8dc;
         border: 1px solid rgba(255,255,255,0.16); padding: 3px 10px;
@@ -95,7 +97,7 @@
 </head>
 <body>
 <div id="map"></div>
-<div id="overlay"><canvas id="field"></canvas><canvas id="wavemark"></canvas><canvas id="currents"></canvas><canvas id="particles"></canvas></div>
+<div id="overlay"><canvas id="field"></canvas><canvas id="wavemark"></canvas><canvas id="currents"></canvas><canvas id="particles"></canvas><canvas id="particlesGL"></canvas></div>
 
 <header class="panel">
   <h1>ORCA Live Weather Map — Kutch &amp; Saurashtra</h1>
@@ -149,6 +151,12 @@
       <label><input type="checkbox" id="tgRef" checked> grid</label>
       <label><input type="checkbox" id="tgCur" checked> currents</label>
       <label><input type="checkbox" id="tgWaves" checked> waves</label>
+      <label><input type="checkbox" id="tgGPU" checked> GPU wind</label>
+      <select id="windSpd" title="wind animation speed">
+        <option value="0.5">×½</option>
+        <option value="1" selected>×1</option>
+        <option value="2">×2</option>
+      </select>
       <span class="bmsep"></span>
       <span class="bms">
         <button class="bm" data-bm="satellite">Satellite</button>
@@ -183,6 +191,7 @@ window.addEventListener('unhandledrejection', function (e) {
   if (b) { b.textContent = '⚠ ' + (e.reason && e.reason.message ? e.reason.message : 'async error'); b.style.color = '#ff6b6b'; }
 });
 </script>
+<script src="/frontend/wind_gpu.js"></script>
 <script src="/frontend/weather_map.js"></script>
 </body>
 </html>

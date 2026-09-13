@@ -686,6 +686,8 @@ def weather_map_page():
     html = (root / "frontend" / "weather_map.html").read_text()
     html = html.replace("/frontend/weather_map.js",
                         f"/frontend/weather_map.js?v={_GIT_COMMIT}")
+    html = html.replace("/frontend/wind_gpu.js",
+                        f"/frontend/wind_gpu.js?v={_GIT_COMMIT}")
     html = html.replace("/frontend/vendor/leaflet.js",
                         f"/frontend/vendor/leaflet.js?v={_GIT_COMMIT}")
     html = html.replace("/frontend/vendor/leaflet.css",

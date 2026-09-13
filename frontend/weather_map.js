@@ -276,6 +276,22 @@ const fC = document.getElementById('field'), pC = document.getElementById('parti
 const wC = document.getElementById('wavemark'), cC = document.getElementById('currents');
 const fx = fC.getContext('2d'), px = pC.getContext('2d');
 const wx = wC.getContext('2d'), cx = cC.getContext('2d');
+const glC = document.getElementById('particlesGL');
+
+/* GPU wind-particle engine (WebGL, zero extensions). Falls back to the
+ * Canvas-2D path above automatically when unavailable/disabled/failed. */
+let windGPU = null;
+try {
+  windGPU = new WindGPU(glC);
+  if (windGPU.ok) {
+    windGPU.setPalette(WIND_KMH);
+    windGPU._onFail = (e) => {
+      try { showStatus('GPU wind fell back to CPU: ' + (e && e.message ? e.message : e), true); } catch (_) {}
+    };
+  }
+} catch (e) { windGPU = null; }
+const gpuActive = () => windGPU && windGPU.ok && !windGPU.failed &&
+                  windGPU.hasField && $('tgGPU').checked && $('tgWind').checked;
 const $ = (id) => document.getElementById(id);
 
 /* ── mercator helpers (world px) ── */
@@ -380,6 +396,11 @@ function updateBadge() {
 function onData(fitIt) {
   loading = false; hideStatus();
   const n = DATA.grid_n, F = DATA.times.length;
+  /* hand the real u/v field to the GPU engine; it refuses fields with
+   * missing cells (never turns nulls into calm) — CPU path stays then */
+  if (windGPU && windGPU.ok) {
+    if (!windGPU.setField(DATA)) windGPU.hasField = false;
+  }
   t = Math.min(t, F - 1);
   $('tslider').max = String((F - 1) * 100);
   buildTinies();          /* tiny per-frame rasters for the active layer */
@@ -529,6 +550,18 @@ function drawRef(p0, p1) {
 }
 
 /* ── wind particles ── */
+function gpuView() {
+  const n = DATA.grid_n;
+  return {
+    gx0: mX(DATA.lons[0]), gy0: mY(DATA.lats[0]),
+    gx1: mX(DATA.lons[n - 1]), gy1: mY(DATA.lats[n - 1]),
+    originX: origin.x, originY: origin.y,
+    pxPerM: scale / 40075016.686,
+    N: 256 * Math.pow(2, map.getZoom()),
+    simRate: SIM_RATE,
+    dpr: window.devicePixelRatio || 1,
+  };
+}
 function respawn() {
   if (!DATA) { particles = []; return; }
   const n = DATA.grid_n;
@@ -807,7 +840,13 @@ function loop(ts) {
         if (t > DATA.times.length - 1) t = 0;
         $('tslider').value = String(Math.round(t * 100));
       }
-      drawParticles(dt, t);
+      if (gpuActive()) {
+        if (!loop._gpu) { loop._gpu = true; px.clearRect(0, 0, pC.clientWidth, pC.clientHeight); }
+        windGPU.step(dt, t, gpuView());
+      } else {
+        if (loop._gpu) { loop._gpu = false; if (windGPU) windGPU.clearTrails(); glC.width = glC.width; }
+        drawParticles(dt, t);
+      }
       drawCurParticles(dt);
       if (needsField || Math.abs(t - lastDrawnT) > 0.008) {
         drawField(t); lastDrawnT = t; needsField = false;
@@ -856,8 +895,9 @@ map.on('click', (e) => {
   } else { pinMarker.setLatLng(pinLL); }
 });
 map.on('move zoom', () => { reproj(); needsField = true; });
-map.on('zoomstart', () => {
+map.on('zoomstart movestart', () => {
   px.clearRect(0, 0, pC.clientWidth, pC.clientHeight);
+  if (windGPU) windGPU.clearTrails();
   cx.clearRect(0, 0, cC.clientWidth, cC.clientHeight);
 });
 map.on('moveend', () => {
@@ -875,6 +915,15 @@ map.on('moveend', () => {
   }
 });
 $('tgRef').onchange = () => { needsField = true; };
+$('tgGPU').onchange = () => { needsField = true; };
+$('windSpd').onchange = () => {
+  if (windGPU) windGPU.config.speedScale = +$('windSpd').value;
+};
+if (windGPU && !windGPU.ok) {
+  const el = $('tgGPU');
+  el.checked = false; el.disabled = true;
+  el.parentElement.title = 'WebGL unavailable — CPU particles';
+}
 document.querySelectorAll('#layers .lyr').forEach((b) => {
   b.onclick = () => selectLayer(b.dataset.lyr);
 });
@@ -892,6 +941,7 @@ function resize() {
     cv.height = Math.round(cv.clientHeight * dpr);
     cv.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
   }
+  if (windGPU && windGPU.ok) windGPU.resize(glC.clientWidth, glC.clientHeight, dpr);
   needsField = true;
 }
 window.addEventListener('resize', resize);
