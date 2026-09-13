@@ -48,9 +48,49 @@ let cursorLL = null, tinies = [];
 let particles = [], origin = {x: 0, y: 0}, scale = 1;
 
 const map = L.map('map', {zoomControl: true, attributionControl: true,
-                          minZoom: 4, maxZoom: 12, worldCopyJump: false})
+                          minZoom: 4, maxZoom: 17, worldCopyJump: false})
   .setView([22.2, 69.4], 7);
-L.tileLayer('/api/v1/tiles/{z}/{x}/{y}.png', {maxZoom: 12}).addTo(map);
+
+/* Real basemaps — fetched DIRECTLY by the browser from Esri/CARTO/OSM
+ * (the backend proxy can't reach tile servers from every network; the
+ * user's browser almost always can). If a provider is unreachable the
+ * layer auto-falls-forward, ending at the first-party proxy. */
+const BASEMAPS = [
+  {id: 'satellite', label: 'Satellite',
+   url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+   attr: 'Imagery © Esri, Maxar, Earthstar Geographics', maxZoom: 18},
+  {id: 'dark', label: 'Dark',
+   url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+   attr: '© OpenStreetMap contributors © CARTO', subdomains: 'abcd', maxZoom: 19},
+  {id: 'streets', label: 'Streets',
+   url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+   attr: '© OpenStreetMap contributors', maxZoom: 19},
+  {id: 'proxy', label: 'Proxy',
+   url: '/api/v1/tiles/{z}/{x}/{y}.png',
+   attr: 'ORCA tile proxy', maxZoom: 12},
+];
+let baseLayer = null, tileOk = false;
+function mountBasemap(i) {
+  const cfg = BASEMAPS[Math.max(0, Math.min(i, BASEMAPS.length - 1))];
+  if (baseLayer) map.removeLayer(baseLayer);
+  tileOk = false;
+  baseLayer = L.tileLayer(cfg.url, {
+      maxZoom: cfg.maxZoom, attribution: cfg.attr,
+      subdomains: cfg.subdomains || 'abc'})
+    .on('tileload', () => { tileOk = true; })
+    .on('tileerror', () => {
+      /* zero tiles loaded → provider unreachable → fall forward */
+      if (!tileOk && i + 1 < BASEMAPS.length) mountBasemap(i + 1);
+    })
+    .addTo(map);
+  document.querySelectorAll('.bm').forEach(b =>
+    b.classList.toggle('on', b.dataset.bm === cfg.id));
+}
+mountBasemap(0);                    /* satellite — the zoom.earth look */
+document.querySelectorAll('.bm').forEach(b => b.addEventListener('click', () => {
+  const i = BASEMAPS.findIndex(c => c.id === b.dataset.bm);
+  if (i >= 0) mountBasemap(i);
+}));
 
 const fC = document.getElementById('field'), pC = document.getElementById('particles');
 const fx = fC.getContext('2d'), px = pC.getContext('2d');

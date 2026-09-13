@@ -44,10 +44,21 @@
   #controls { left: 50%; transform: translateX(-50%); bottom: 14px; padding: 10px 16px 12px;
               width: min(680px, calc(100vw - 24px)); }
   #controls .top { display: flex; align-items: center; gap: 12px; }
+  #field { opacity: 0.84; }              /* let satellite/streets show through the wash */
   #play { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--line);
           background: rgba(46,158,143,0.18); color: #58d6c6; font-size: 14px; cursor: pointer;
           display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
   #play:hover { background: rgba(46,158,143,0.32); }
+  .bmsep { width: 1px; align-self: stretch; background: var(--line); margin: 2px 2px; }
+  .bms { display: flex; }
+  .bm { background: rgba(255,255,255,0.06); color: #cfd8dc;
+        border: 1px solid rgba(255,255,255,0.16); padding: 3px 10px;
+        font: 11px/1.3 system-ui, sans-serif; cursor: pointer; }
+  .bm + .bm { margin-left: -1px; }
+  .bm:first-child { border-radius: 6px 0 0 6px; }
+  .bm:last-child { border-radius: 0 6px 6px 0; }
+  .bm.on { background: #2e9e8f; color: #04211d; border-color: #2e9e8f; font-weight: 700; }
+  .bm:not(.on):hover { background: rgba(255,255,255,0.14); }
   #tlabel { font-size: 12.5px; font-weight: 600; min-width: 190px; text-align: center;
             font-variant-numeric: tabular-nums; color: #e8f1f8; }
   #tslider { flex: 1; accent-color: #2e9e8f; height: 4px; cursor: pointer; }
@@ -107,6 +118,12 @@
       <label><input type="checkbox" id="tgHum" checked> humidity</label>
       <label><input type="checkbox" id="tgWind" checked> wind</label>
       <label><input type="checkbox" id="tgRef" checked> grid</label>
+      <span class="bmsep"></span>
+      <span class="bms">
+        <button class="bm" data-bm="satellite">Satellite</button>
+        <button class="bm" data-bm="dark">Dark</button>
+        <button class="bm" data-bm="streets">Streets</button>
+      </span>
     </div>
   </div>
 </div>

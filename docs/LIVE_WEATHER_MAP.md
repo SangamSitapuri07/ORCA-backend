@@ -15,7 +15,10 @@ GET /api/v1/weather/grid?demo=1   → bundled REAL ICON snapshot (offline fallba
 
 ```
 browser (/map)
- ├─ Leaflet + OSM tiles via first-party proxy /api/v1/tiles/{z}/{x}/{y}.png
+ ├─ Leaflet + real basemaps fetched DIRECTLY by the browser:
+ │   Esri World Imagery (satellite, default), CARTO Dark, OSM Streets —
+ │   switcher in the controls; auto-fallback chain per provider ends at
+ │   the first-party proxy /api/v1/tiles/{z}/{x}/{y}.png
  ├─ #field canvas     humidity colours: per-frame 9×9 (or 12×12) rasters
  │                    cross-faded between hourly frames, HALF-CELL-CORRECT
  │                    stretch (grid point i lands at i·cell px — the same
@@ -110,10 +113,15 @@ model run (shifted one hour) — zero mismatches.
 - **Production (backend with internet):** badge shows LIVE; the grid
   follows the viewport (re-fetched, debounced, on pan/zoom); OSM tiles
   render under the field.
-- **This build sandbox:** no egress to open-meteo/OSM → the live attempt
-  fails in <50 ms (honest 500), the page falls back to the demo snapshot,
-  and the basemap stays dark — the data field + particles + graticule +
-  city anchors carry the visuals.
+- **This build sandbox:** the sandbox has no server-side egress to
+  open-meteo.com → the live attempt fails in <50 ms (honest 500) and the
+  page falls back to the demo snapshot. Basemaps are unaffected: they are
+  fetched client-side by YOUR browser from Esri/CARTO/OSM, so the preview
+  shows real satellite imagery under the animated field (the humidity
+  wash is drawn at 84% opacity so the geography shows through — flip to
+  Dark for the nullschool look). If a provider is unreachable from the
+  viewer's network the layer auto-falls-forward, ending at the backend
+  proxy. Proper attribution (Esri/Maxar, CARTO, OSM) is shown bottom-right.
 
 ## SIH-2026 porting (prabhbani/ORCA-SIH-2026)
 
