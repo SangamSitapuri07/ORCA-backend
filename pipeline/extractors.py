@@ -309,15 +309,16 @@ def extract_wind(pf, lat: float, lon: float) -> dict[str, Any] | None:
                 return None
 
             speed = math.hypot(u, v)
-            # Meteorological convention: direction wind is BLOWING FROM.
-            # atan2 of (u, v) gives direction wind is BLOWING TOWARDS (east = 0, north = 90).
-            # To convert: meteorological_dir = (270 - atan2_deg) mod 360
-            direction_towards = math.degrees(math.atan2(v, u))
-            # atan2(v, u) returns angle from east axis, going counter-clockwise.
-            # We want meteorological: 0 = from North, 90 = from East.
-            # dir_towards is direction wind is going (vector direction).
-            # meteorological_from = (dir_towards + 180) mod 360
-            met_from = (direction_towards + 180) % 360
+            # Meteorological convention: direction wind is BLOWING FROM
+            # (0 = from North, 90 = from East, clockwise).
+            # atan2(v, u) is a MATH angle (0 = east, counter-clockwise);
+            # compass FROM-direction = (270 - math_angle) mod 360.
+            # (Equivalently atan2(u, v) + 180 — both are the standard
+            # formula. The old code here did (atan2(v,u) + 180) % 360,
+            # which mixes conventions and is wrong except at 45°/225°.
+            # Caught 2026-09-13 while reviewing the SIH-2026 port, which
+            # implements the correct formula.)
+            met_from = (270.0 - math.degrees(math.atan2(v, u))) % 360.0
 
             result = {
                 "u": u,

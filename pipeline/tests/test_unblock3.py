@@ -175,7 +175,10 @@ def test_ah_grid_parses_and_extracts_wind_despite_sigma0():
     res = extract_wind(pf, 15.0, 72.0)
     assert res is not None and "error" not in res
     assert res["speed"] == pytest.approx(5.831, abs=0.01)
-    assert res["direction_deg"] == pytest.approx(210.96, abs=0.2)
+    # u=5 (east), v=3 (north): math angle atan2(3,5)=30.96° ccw-from-east;
+    # compass FROM-direction = 270-30.96 = 239.04° (from SW). The old
+    # (atan2+180)%360 formula returned 210.96° — convention mix-up fixed.
+    assert res["direction_deg"] == pytest.approx(239.04, abs=0.2)
 
 
 # ── WV12 L2B: 2D packed geolocation in a subgroup ─────────────────────
