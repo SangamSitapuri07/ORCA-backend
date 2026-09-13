@@ -1,14 +1,18 @@
 # Live Animated Weather Map (zoom.earth-style) — ORCA-backend
 
 **Open it:** start the backend and visit **`/map`** — interactive map with
-animated wind particles, humidity colours that flow through the forecast
-hours, a time slider, hover readout, and layer toggles. Same underlying
-model as zoom.earth (DWD ICON global via Open-Meteo), rebuilt first-party.
+animated **wind particles**, **satellite ocean currents**, **wave arrows**,
+**sea-surface temperature**, and humidity colours that flow through the
+forecast hours, plus a time slider, hover readout, and per-layer toggles.
+Weather from the same model family zoom.earth uses (DWD ICON via
+Open-Meteo); sea layers from NOAA satellites — all first-party.
 
 ```
 GET /map                          → the map page (no build step, Leaflet from CDN)
-GET /api/v1/weather/grid?...      → the animation feed (below)
+GET /api/v1/weather/grid?...      → wind + humidity + temp feed
+GET /api/v1/ocean/grid?...        → currents + waves + SST feed
 GET /api/v1/weather/grid?demo=1   → bundled REAL ICON snapshot (offline fallback)
+GET /api/v1/ocean/grid?demo=1     → bundled REAL ocean snapshots
 ```
 
 ## Architecture
@@ -23,6 +27,12 @@ browser (/map)
  │                    cross-faded between hourly frames, HALF-CELL-CORRECT
  │                    stretch (grid point i lands at i·cell px — the same
  │                    fix proven in scripts/render_humidity_preview.py)
+ ├─ #wavemark canvas  wave chevrons at grid points — point TOWARD travel,
+ │                    coloured by significant wave height (calm→rough)
+ ├─ #currents canvas  cyan particles advected through the satellite
+ │                    geostrophic current field (displayed 8× true speed,
+ │                    like every current visualiser), over water only —
+ │                    null cells ARE the coastline
  ├─ #particles canvas ~1–2k particles advected through the time-interpolated
  │                    10 m wind field; mercator-correct speeds; fading
  │                    trails (destination-out); positions in WORLD px so
@@ -71,6 +81,31 @@ Response (compact — built for animation, one value per point per frame):
 Points are **row-major north→south**: point index `p = row*grid_n + col`.
 Missing values are `null` — never fabricated. Errors are honest HTTP 500s.
 
+## Ocean layers — GET /api/v1/ocean/grid
+
+Same lattice/params as the weather grid (`lat, lon, span ≤30, frames ≤25,
+grid ≤16`, `?demo=1`). Three independent real sources, no logins:
+
+| layer | source (verified live 2026-09-13) | cadence |
+|---|---|---|
+| currents `cu`,`cv` | NOAA CoastWatch **satellite altimetry geostrophic currents** (`noaacwBLENDEDNRTcurrentsDaily`, 0.25°; Sentinel-3A/B, CryoSat2, Jason-2/3, **SARAL/AltiKa — ISRO**) | daily, ~3-day NRT lag |
+| `sst` | NOAA Coral Reef Watch **CoralTemp** satellite SST (`noaacrwsstDaily`, 0.05° native, sampled 0.25°) | daily, ~2-day lag |
+| waves `wh`,`wd`,`wp` | **Open-Meteo Marine** (height m, FROM-direction °, period s) | hourly |
+
+- Native satellite cells are bilinearly interpolated server-side onto the
+  weather lattice; coastal cells with null corners take the nearest valid
+  corner (never an invented gradient); deep-land stays `null`.
+- Currents/SST are daily (single frame, constant across the time slider);
+  waves are hourly and follow the same clock (nearest-hour mapping).
+- Each source fails independently — an outage drops that layer with an
+  honest `errors` entry, the rest still render.
+
+**Demo snapshot** (`pipeline/ocean_demo_snapshot.py`): real relayed values —
+currents 2026-09-10 00Z, SST 2026-09-11 12Z, waves 2026-09-13 08Z —
+verbatim, with the genuine Gulf-of-Kutch **0.76 m/s jet** in the altimetry.
+54 of 81 demo lattice points are sea; the 27 land nulls trace the actual
+Kutch coastline.
+
 ## Wire-format facts (verified live 2026-09-13)
 
 - `models=icon_global` — bare `icon` is rejected ("Cannot initialize
@@ -105,6 +140,13 @@ model run (shifted one hour) — zero mismatches.
   from ~270°), near-calm swirls over the Rann — particles move at a
   time-accelerated rate (~5 simulated hours per real second, like
   earth.nullschool.net).
+- **Currents (cyan):** slow satellite-measured flows — strongest in the
+  Gulf of Kutch channel (~0.7–0.8 m/s), drawn 8× true speed so they're
+  visible next to wind.
+- **Waves (chevrons):** ~1.6–1.8 m swell from the SSW offshore, decaying
+  to 0.3–0.5 m inside the Gulf; arrows point where waves travel.
+- **Sea temp (toggle):** ~27.9–28.8 °C water painted over the satellite
+  basemap; the toggle switches the colour wash and legend.
 - **Hover:** RH, wind speed/dir (m/s, km/h, compass), temperature at the
   cursor, at the displayed (interpolated) time.
 
@@ -152,7 +194,14 @@ endpoint also ships `legend`, so the frontend can build from data).
 | path | what |
 |------|------|
 | `frontend/weather_map.html` | page shell, dark UI, controls, legend |
-| `frontend/weather_map.js` | canvases, particle engine, time engine, HUD |
-| `pipeline/weather_grid.py` | live multi-frame grid (one API call) |
+| `frontend/weather_map.js` | canvases, particle engines, time engine, HUD |
+| `pipeline/weather_grid.py` | live multi-frame weather grid (one API call) |
 | `pipeline/weather_demo_snapshot.py` | real ICON snapshot + integrity story |
-| `pipeline/tests/test_weather_grid.py` | 11 offline tests incl. wire contract + snapshot cross-check |
+| `pipeline/ocean_grid.py` | currents + waves + SST (two ERDDAP + one marine call) |
+| `pipeline/ocean_demo_snapshot.py` | real satellite/marine snapshots, verbatim |
+| `pipeline/tests/test_weather_grid.py` | 11 offline tests (weather) |
+| `pipeline/tests/test_ocean_grid.py` | 9 offline tests (ocean, incl. coastal-null rules) |
+
+**Attribution:** weather — DWD ICON via Open-Meteo (CC-BY-4.0); currents —
+NOAA NESDIS CoastWatch blended altimetry; SST — NOAA Coral Reef Watch
+CoralTemp; waves — Open-Meteo Marine; basemaps — Esri/Maxar, CARTO, OSM.
